@@ -1,0 +1,44 @@
+name: one-search-api
+
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: onesearch-searxng
+    restart: unless-stopped
+    ports:
+      # 只监听本机；onesearch 通过容器网络访问它
+      - "127.0.0.1:8888:8080"
+    volumes:
+      - ./deploy/searxng/settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8888/
+
+  onesearch:
+    build:
+      context: .
+      args:
+        VERSION: docker
+    container_name: onesearch
+    restart: unless-stopped
+    depends_on:
+      - searxng
+    ports:
+      # 默认只监听本机；对外服务请放在 HTTPS 反代后面
+      - "127.0.0.1:8080:8080"
+    environment:
+      ONESEARCH_ADDR: ":8080"
+      ONESEARCH_AUTH_MODE: "key"
+      # name:token:rpm:daily_quota:max_results
+      ONESEARCH_AUTH_KEYS: "me:sk-change-me-please:120:5000:50"
+      ONESEARCH_SEARXNG_URL: "http://searxng:8080"
+      ONESEARCH_LOG_FORMAT: "json"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp

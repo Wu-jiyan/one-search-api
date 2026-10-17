@@ -1,0 +1,6 @@
+/dist/
+/onesearch
+/onesearch.exe
+/config.yaml
+*.log
+*.out.json

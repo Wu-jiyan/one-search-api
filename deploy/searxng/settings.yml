@@ -1,0 +1,21 @@
+# Minimal SearXNG configuration for one-search-api.
+# The important part is search.formats containing "json": the API refuses to
+# return JSON unless it is explicitly enabled here.
+use_default_settings: true
+
+general:
+  instance_name: "one-search-api"
+
+server:
+  # CHANGE THIS before exposing the instance.
+  secret_key: "CHANGE_ME_onesearch_secret_key"
+  limiter: false
+  public_instance: false
+  image_proxy: false
+
+search:
+  safe_search: 0
+  default_lang: "zh-CN"
+  formats:
+    - html
+    - json

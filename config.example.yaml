@@ -1,0 +1,119 @@
+# One Search API 示例配置
+# 复制为 config.yaml 后修改；所有时长均为 Go duration 字符串（5s / 1m / 2h）。
+
+server:
+  addr: ":8080"
+  read_header_timeout: 5s
+  # 单请求总预算：搜索的上游扇出(12s) + 正文抓取都在这个预算内
+  request_timeout: 30s
+  shutdown_timeout: 10s
+  max_body_bytes: 1048576   # 1 MiB
+  # 只有来自这些地址的 X-Forwarded-For 才会被采信
+  trusted_proxies:
+    - 127.0.0.1
+    - ::1
+
+auth:
+  # none = 本机调试用（所有人可用，按 IP 限流）；key = 必须带 Bearer Key
+  mode: key
+  anonymous_rpm: 30
+  anonymous_daily_quota: 0   # 0 = 不限
+  keys:
+    - name: me
+      # 可直接写明文，也可写 "sha256:<hex>"（推荐）
+      token: "sk-onesearch-change-me"
+      rpm: 120                # 每分钟请求数
+      burst: 20               # 令牌桶容量
+      daily_quota: 5000       # 每天请求数，0 = 不限
+      max_results: 50         # 该 Key 单次最多返回条数
+      allowed_providers: []   # 空 = 允许全部 provider
+
+    - name: friend
+      token: "sk-onesearch-friend-change-me"
+      rpm: 60
+      burst: 10
+      daily_quota: 1500
+      max_results: 20
+      allowed_providers: [searxng, bing]
+
+search:
+  default_count: 10
+  max_count: 50
+  overall_timeout: 12s        # 上游扇出总预算
+  provider_timeout: 2500ms    # 单个 provider 预算
+  max_concurrency: 32         # 全局并发请求闸门
+  need_content_max_results: 10
+  content_fetch_timeout: 8s
+  content_fetch_concurrency: 6
+  per_domain_limit: 3
+  cache_ttl: 5m
+  site_icon_template: "https://{host}/favicon.ico"
+  # 已有足够结果后，最多再等这么久就放弃慢 provider（0 或注释掉 = 800ms）
+  hedge_delay: 800ms
+
+fetch:
+  timeout: 10s
+  max_bytes: 5242880          # 5 MiB
+  max_redirects: 5
+  allow_private: false        # 生产环境务必保持 false（SSRF 防护）
+  allow_ports: [80, 443, 8080, 8443]
+  user_agent: "Mozilla/5.0 (compatible; OneSearchAPI/1.0)"
+  cache_ttl: 30m
+  min_content_runes: 120
+
+providers:
+  # SearXNG：需要在其 settings.yml 的 search.formats 中开启 json
+  - name: searxng
+    type: searxng
+    enabled: true
+    weight: 1.1
+    base_url: "http://127.0.0.1:8888"
+    token: ""                 # SearXNG 若启用 token 鉴权则填写
+    rpm: 120
+    timeout: 3s
+
+  # Bing RSS：无需 Key；注意微软声明其仅限个人非商业用途
+  - name: bing
+    type: bingrss
+    enabled: true
+    weight: 0.9
+    base_url: "https://cn.bing.com"
+    rpm: 30
+    timeout: 2500ms
+
+  # DuckDuckGo HTML：无需 Key，但可能触发验证码；中国大陆网络通常不可达，默认关闭
+  - name: ddg
+    type: duckduckgo
+    enabled: false
+    weight: 0.8
+    base_url: "https://html.duckduckgo.com"
+    rpm: 20
+    timeout: 3s
+
+  # Brave Search API（免费 2000 次/月，需要自备 key）
+  - name: brave
+    type: brave
+    enabled: false
+    weight: 1.0
+    api_key: ""
+    region: ""                # 可选，如 US / CN
+    rpm: 30
+
+  # Tavily（免费 1000 次/月，需要自备 key）
+  - name: tavily
+    type: tavily
+    enabled: false
+    weight: 1.0
+    api_key: ""
+    rpm: 30
+
+cache:
+  search_max_entries: 512
+  fetch_max_entries: 512
+  search_ttl: 5m
+  fetch_ttl: 30m
+  cleanup_interval: 1m
+
+log:
+  level: info
+  format: json                # json | text
