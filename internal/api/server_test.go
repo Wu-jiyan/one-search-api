@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -330,6 +331,28 @@ func TestSearchIgnoresUnknownFields(t *testing.T) {
 		map[string]any{"query": "unknown-fields", "totally_unknown": 42, "localization": "1.2.3.4"})
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", status, body)
+	}
+}
+
+func TestPayloadTooLarge(t *testing.T) {
+	env := newEnv(t, nil)
+	big := strings.Repeat("a", int(env.cfg.Server.MaxBodyBytes)+4096)
+	status, _, body := env.call(http.MethodPost, "/v1/tools/search", "test-key", `{"query":"`+big+`"}`)
+	if status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413, body = %s", status, body)
+	}
+	eb := decodeError(t, body)
+	if eb.Error.Code != "payload_too_large" {
+		t.Errorf("code = %q", eb.Error.Code)
+	}
+}
+
+func TestDecodeErrorMapping(t *testing.T) {
+	if e := decodeBodyError(errors.New("bad json")); e.Status != http.StatusBadRequest {
+		t.Errorf("generic decode error -> %d", e.Status)
+	}
+	if e := decodeBodyError(context.DeadlineExceeded); e.Status != http.StatusRequestTimeout || e.Code != "request_timeout" {
+		t.Errorf("timeout decode error -> %+v", e)
 	}
 }
 

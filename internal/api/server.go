@@ -208,11 +208,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	body := http.MaxBytesReader(w, r.Body, s.cfg.Server.MaxBodyBytes)
 	var req httpx.SearchRequest
 	if err := json.NewDecoder(body).Decode(&req); err != nil {
-		if isMaxBytes(err) {
-			httpx.WriteError(w, tooLarge())
-			return
-		}
-		httpx.WriteError(w, httpx.InvalidRequest("request body must be a valid JSON object"))
+		httpx.WriteError(w, decodeBodyError(err))
 		return
 	}
 
@@ -262,11 +258,7 @@ func (s *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
 	body := http.MaxBytesReader(w, r.Body, s.cfg.Server.MaxBodyBytes)
 	var req httpx.FetchRequest
 	if err := json.NewDecoder(body).Decode(&req); err != nil {
-		if isMaxBytes(err) {
-			httpx.WriteError(w, tooLarge())
-			return
-		}
-		httpx.WriteError(w, httpx.InvalidRequest("request body must be a valid JSON object"))
+		httpx.WriteError(w, decodeBodyError(err))
 		return
 	}
 	if strings.TrimSpace(req.URL) == "" {
@@ -541,6 +533,29 @@ func randomID() string {
 func isMaxBytes(err error) bool {
 	var mbe *http.MaxBytesError
 	return errors.As(err, &mbe)
+}
+
+func isTimeoutError(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
+}
+
+// decodeError maps a request-body decode failure to the documented error
+// contract: 413 for oversized bodies, 408 for read timeouts, 400 otherwise.
+func decodeBodyError(err error) *httpx.APIError {
+	switch {
+	case isMaxBytes(err):
+		return tooLarge()
+	case isTimeoutError(err):
+		e := httpx.NewAPIError(http.StatusRequestTimeout, httpx.TypeTimeout, "timed out reading request body")
+		e.Code = "request_timeout"
+		return e
+	default:
+		return httpx.InvalidRequest("request body must be a valid JSON object")
+	}
 }
 
 func tooLarge() *httpx.APIError {
