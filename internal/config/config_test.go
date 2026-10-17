@@ -119,6 +119,55 @@ func TestInvalidConfigs(t *testing.T) {
 	}
 }
 
+func TestProviderFingerprintFields(t *testing.T) {
+	cfg := Default()
+	cfg.Providers = []ProviderConfig{{
+		Name:        "bing",
+		Type:        "binghtml",
+		BaseURL:     "https://cn.bing.com",
+		Market:      "  zh-CN  ",
+		Mobile:      true,
+		UserAgent:   "  MyUA/1.0  ",
+		Referer:     "https://cn.bing.com/",
+		Cookies:     " a=b ",
+		Warmup:      boolPtr(false),
+		ExtraParams: map[string]string{"x": "1", " y ": "2", "": "drop"},
+	}}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	p := cfg.Providers[0]
+	if p.Market != "zh-CN" || !p.Mobile {
+		t.Errorf("market/mobile = %q/%v", p.Market, p.Mobile)
+	}
+	if p.UserAgent != "MyUA/1.0" || p.Cookies != "a=b" {
+		t.Errorf("ua/cookies = %q/%q", p.UserAgent, p.Cookies)
+	}
+	if p.ExtraParams["x"] != "1" || p.ExtraParams["y"] != "2" {
+		t.Errorf("extra params not normalized: %v", p.ExtraParams)
+	}
+	if _, ok := p.ExtraParams[""]; ok {
+		t.Error("empty extra param key should be dropped")
+	}
+	if p.IsWarmupEnabled() {
+		t.Error("warmup: false should be honoured")
+	}
+}
+
+func TestBingHTMLRequiresBaseURL(t *testing.T) {
+	cfg := Default()
+	cfg.Providers = []ProviderConfig{{Name: "b", Type: "binghtml"}}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "base_url is required") {
+		t.Errorf("Validate() = %v, want base_url error", err)
+	}
+}
+
 func TestEnvOverride(t *testing.T) {
 	t.Setenv("ONESEARCH_ADDR", ":7777")
 	t.Setenv("ONESEARCH_AUTH_MODE", "key")

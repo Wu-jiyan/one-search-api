@@ -126,7 +126,9 @@ func (s *Service) run(ctx context.Context, q query.Query, count int, needContent
 	runCtx, cancel := context.WithTimeout(ctx, s.cfg.OverallTimeout.D())
 	defer cancel()
 
-	raw := s.fanOut(runCtx, q, count, allowed)
+	batches := s.fanOut(runCtx, q, count, allowed)
+	raw := flattenBatches(s.dropStaleBatches(q, batches))
+	raw = s.filterOffTopic(q, raw)
 
 	if len(raw) == 0 && runCtx.Err() != nil {
 		return nil, httpx.UpstreamTimeout("all search providers timed out")
@@ -156,10 +158,113 @@ func (s *Service) run(ctx context.Context, q query.Query, count int, needContent
 	return out, nil
 }
 
-func (s *Service) fanOut(ctx context.Context, q query.Query, count int, allowed map[string]bool) []provider.Result {
+// providerBatch is one provider's complete result set.
+type providerBatch struct {
+	name    string
+	results []provider.Result
+}
+
+func flattenBatches(batches []providerBatch) []provider.Result {
+	n := 0
+	for _, b := range batches {
+		n += len(b.results)
+	}
+	out := make([]provider.Result, 0, n)
+	for _, b := range batches {
+		out = append(out, b.results...)
+	}
+	return out
+}
+
+// batchRelevance is the fraction of results that mention at least one query term.
+func batchRelevance(results []provider.Result, terms []string) float64 {
+	if len(results) == 0 || len(terms) == 0 {
+		return 0
+	}
+	hits := 0
+	for _, r := range results {
+		text := strings.ToLower(r.Title + " " + r.Snippet)
+		for _, t := range terms {
+			if strings.Contains(text, t) {
+				hits++
+				break
+			}
+		}
+	}
+	return float64(hits) / float64(len(results))
+}
+
+// dropStaleBatches discards provider result sets that are clearly unrelated to
+// the query while another provider returned an on-topic set. Bing occasionally
+// replays another query's cached page from an edge node (seen live: Go queries
+// returning Vietnamese-food pages), and this keeps that noise out of ranking.
+func (s *Service) dropStaleBatches(q query.Query, batches []providerBatch) []providerBatch {
+	terms := q.Terms()
+	if len(terms) == 0 || len(batches) < 2 {
+		return batches
+	}
+	scores := make([]float64, len(batches))
+	best := 0.0
+	for i, b := range batches {
+		scores[i] = batchRelevance(b.results, terms)
+		if scores[i] > best {
+			best = scores[i]
+		}
+	}
+	// Only act when at least one source is clearly on-topic.
+	if best < 0.5 {
+		return batches
+	}
+	kept := make([]providerBatch, 0, len(batches))
+	for i, b := range batches {
+		if scores[i] < 0.2 {
+			s.metrics.Inc("onesearch_provider_requests_total", "provider", b.name, "outcome", "stale_dropped")
+			s.logger.Debug("dropping off-topic provider batch",
+				"provider", b.name, "relevance", scores[i], "best", best)
+			continue
+		}
+		kept = append(kept, b)
+	}
+	if len(kept) == 0 {
+		return batches
+	}
+	return kept
+}
+
+// filterOffTopic is the single-provider safety net: if every batch looks off,
+// keep only items that mention at least one query term (unless nothing matches,
+// in which case the original set is returned rather than an empty page).
+func (s *Service) filterOffTopic(q query.Query, raw []provider.Result) []provider.Result {
+	terms := q.Terms()
+	if len(terms) < 2 || len(raw) == 0 {
+		return raw
+	}
+	if batchRelevance(raw, terms) >= 0.2 {
+		return raw
+	}
+	kept := make([]provider.Result, 0, len(raw))
+	for _, r := range raw {
+		text := strings.ToLower(r.Title + " " + r.Snippet)
+		for _, t := range terms {
+			if strings.Contains(text, t) {
+				kept = append(kept, r)
+				break
+			}
+		}
+	}
+	if len(kept) == 0 {
+		return raw
+	}
+	s.logger.Debug("filtered off-topic results", "kept", len(kept), "total", len(raw))
+	s.metrics.Add("onesearch_results_filtered_total", float64(len(raw)-len(kept)))
+	return kept
+}
+
+func (s *Service) fanOut(ctx context.Context, q query.Query, count int, allowed map[string]bool) []providerBatch {
 	type outcome struct {
-		res []provider.Result
-		err error
+		name string
+		res  []provider.Result
+		err  error
 	}
 
 	srcs := make([]*Source, 0, len(s.sources))
@@ -214,7 +319,7 @@ func (s *Service) fanOut(ctx context.Context, q query.Query, count int, allowed 
 				s.metrics.Inc("onesearch_provider_requests_total", "provider", src.Name, "outcome", "error")
 				s.logger.Debug("provider failed", "provider", src.Name, "error", err.Error())
 			}
-			ch <- outcome{res: res, err: err}
+			ch <- outcome{name: src.Name, res: res, err: err}
 		}(src)
 	}
 	go func() {
@@ -237,10 +342,11 @@ func (s *Service) fanOut(ctx context.Context, q query.Query, count int, allowed 
 	}
 
 	var (
-		raw       []provider.Result
-		hedgeC    <-chan time.Time
-		hedgeStop func()
-		stopOnce  sync.Once
+		batches    []providerBatch
+		totalItems int
+		hedgeC     <-chan time.Time
+		hedgeStop  func()
+		stopOnce   sync.Once
 	)
 	stopHedge := func() {
 		stopOnce.Do(func() {
@@ -261,8 +367,9 @@ func (s *Service) fanOut(ctx context.Context, q query.Query, count int, allowed 
 			}
 			pending--
 			if o.err == nil && len(o.res) > 0 {
-				raw = append(raw, o.res...)
-				if hedgeC == nil && len(raw) >= threshold {
+				batches = append(batches, providerBatch{name: o.name, results: o.res})
+				totalItems += len(o.res)
+				if hedgeC == nil && totalItems >= threshold {
 					t := time.NewTimer(hedgeDelay)
 					hedgeC = t.C
 					hedgeStop = func() { t.Stop() }
@@ -276,7 +383,7 @@ func (s *Service) fanOut(ctx context.Context, q query.Query, count int, allowed 
 			pending = 0
 		}
 	}
-	return raw
+	return batches
 }
 
 // fetchContents fetches page bodies for the first need_content_max_results

@@ -20,6 +20,16 @@ import (
 	"github.com/wujiyan/one-search-api/internal/query"
 )
 
+// debugSearch is a test hook used by live tests to trace upstream responses.
+// It is nil in production.
+var debugSearch func(format string, args ...any)
+
+func debugf(format string, args ...any) {
+	if debugSearch != nil {
+		debugSearch(format, args...)
+	}
+}
+
 // Result is one raw search hit produced by a provider, before enrichment.
 type Result struct {
 	Title    string
@@ -39,17 +49,28 @@ type Provider interface {
 	Search(ctx context.Context, q query.Query) ([]Result, error)
 }
 
+// Realistic browser fingerprints used by the scraping providers unless the
+// configuration overrides them. Bing/DuckDuckGo reject Go's default
+// "Go-http-client/1.1" UA intermittently (Bing answers 200 with an empty RSS
+// channel), so a browser UA is not optional in practice.
+const (
+	defaultBrowserUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+	defaultMobileUA  = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+)
+
 // New builds a provider from configuration.
 func New(cfg config.ProviderConfig, userAgent string) (Provider, error) {
-	client := NewHTTPClient(cfg.Timeout.D(), userAgent)
+	ua := resolveProviderUA(cfg, userAgent)
+	client := NewHTTPClient(cfg.Timeout.D(), ua)
 
 	switch cfg.Type {
 	case "searxng":
 		return &searxng{name: cfg.Name, base: cfg.BaseURL, token: cfg.Token,
 			headers: cfg.Headers, region: cfg.Region, client: client}, nil
 	case "bingrss":
-		return &bingRSS{name: cfg.Name, base: cfg.BaseURL, headers: cfg.Headers,
-			region: cfg.Region, client: client}, nil
+		return &bingRSS{name: cfg.Name, sess: newBingSession(cfg, client, ua)}, nil
+	case "binghtml":
+		return &bingHTML{name: cfg.Name, sess: newBingSession(cfg, client, ua)}, nil
 	case "duckduckgo":
 		return &duckDuckGo{name: cfg.Name, base: cfg.BaseURL, headers: cfg.Headers,
 			region: cfg.Region, client: client}, nil
@@ -64,11 +85,48 @@ func New(cfg config.ProviderConfig, userAgent string) (Provider, error) {
 	}
 }
 
+// resolveProviderUA picks the User-Agent for a provider.
+func resolveProviderUA(cfg config.ProviderConfig, fallback string) string {
+	if cfg.UserAgent != "" {
+		return cfg.UserAgent
+	}
+	switch cfg.Type {
+	case "binghtml", "bingrss":
+		if cfg.Mobile {
+			return defaultMobileUA
+		}
+		return defaultBrowserUA
+	case "duckduckgo":
+		return defaultBrowserUA
+	default:
+		if fallback == "" {
+			return "OneSearchAPI/1.0"
+		}
+		return fallback
+	}
+}
+
 func baseOr(v, fallback string) string {
 	if strings.TrimSpace(v) == "" {
 		return fallback
 	}
 	return strings.TrimRight(v, "/")
+}
+
+// uaTransport injects the configured User-Agent when a request does not set
+// one, so no provider accidentally leaks Go's "Go-http-client/1.1" default.
+type uaTransport struct {
+	base http.RoundTripper
+	ua   string
+}
+
+func (t *uaTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.ua == "" || req.Header.Get("User-Agent") != "" {
+		return t.base.RoundTrip(req)
+	}
+	clone := req.Clone(req.Context())
+	clone.Header.Set("User-Agent", t.ua)
+	return t.base.RoundTrip(clone)
 }
 
 // NewHTTPClient returns a client tuned for metered upstream calls.
@@ -93,8 +151,11 @@ func NewHTTPClient(timeout time.Duration, userAgent string) *http.Client {
 		ExpectContinueTimeout: time.Second,
 	}
 	return &http.Client{
-		Timeout:   timeout,
-		Transport: transport,
+		Timeout: timeout,
+		Transport: &uaTransport{
+			base: transport,
+			ua:   userAgent,
+		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
 				return fmt.Errorf("too many redirects")
@@ -104,12 +165,11 @@ func NewHTTPClient(timeout time.Duration, userAgent string) *http.Client {
 	}
 }
 
-// UserAgentOf extracts the configured user agent, falling back sensibly.
-func UserAgentOf(cfg *config.Config) string {
-	if cfg != nil && cfg.Fetch.UserAgent != "" {
-		return cfg.Fetch.UserAgent
-	}
-	return "OneSearchAPI/1.0"
+// Warm is implemented by providers that keep a browser session (Bing). The
+// service calls it at startup in the background so the first user request does
+// not pay for the homepage cookie warm-up.
+type Warm interface {
+	Warm(ctx context.Context)
 }
 
 func nowUTC() time.Time { return time.Now().UTC() }

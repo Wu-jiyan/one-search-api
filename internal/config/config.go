@@ -117,7 +117,7 @@ type FetchConfig struct {
 // ProviderConfig is one upstream search source.
 type ProviderConfig struct {
 	Name    string            `yaml:"name"`
-	Type    string            `yaml:"type"` // searxng|bingrss|duckduckgo|brave|tavily
+	Type    string            `yaml:"type"` // searxng|bingrss|binghtml|duckduckgo|brave|tavily
 	Enabled *bool             `yaml:"enabled"`
 	Weight  float64           `yaml:"weight"`
 	Timeout Duration          `yaml:"timeout"`
@@ -127,10 +127,29 @@ type ProviderConfig struct {
 	Token   string            `yaml:"token"`
 	Region  string            `yaml:"region"`
 	Headers map[string]string `yaml:"headers"`
+
+	// Browser-fingerprint overrides. Empty values fall back to built-in
+	// realistic Chrome values for the Bing/DuckDuckGo scrapers.
+	UserAgent string `yaml:"user_agent"`
+	Referer   string `yaml:"referer"`
+	Cookies   string `yaml:"cookies"` // raw Cookie header, merged with the session jar
+	// Warmup controls the homepage pre-visit that establishes cookies.
+	Warmup *bool `yaml:"warmup"`
+
+	// Bing market fingerprint. Market is sent as setmkt= (e.g. "zh-CN",
+	// "en-WW"); it also selects the Accept-Language header. Mobile switches to
+	// a mobile UA plus the mobile search-box parameters (form=LBT003, PC=...).
+	Market string `yaml:"market"`
+	Mobile bool   `yaml:"mobile"`
+	// ExtraParams are appended verbatim to every search URL.
+	ExtraParams map[string]string `yaml:"extra_params"`
 }
 
 // IsEnabled reports whether the provider should be registered.
 func (p ProviderConfig) IsEnabled() bool { return p.Enabled == nil || *p.Enabled }
+
+// IsWarmupEnabled reports whether the homepage warm-up is enabled (default true).
+func (p ProviderConfig) IsWarmupEnabled() bool { return p.Warmup == nil || *p.Warmup }
 
 // CacheConfig sizes the response caches.
 type CacheConfig struct {
@@ -190,7 +209,7 @@ func Default() *Config {
 			MinContentRunes: 120,
 		},
 		Providers: []ProviderConfig{
-			{Name: "bing", Type: "bingrss", Enabled: &yes, Weight: 0.9, Timeout: Duration(2500 * time.Millisecond), BaseURL: "https://cn.bing.com"},
+			{Name: "bing", Type: "bingrss", Enabled: &yes, Weight: 0.9, Timeout: Duration(6 * time.Second), BaseURL: "https://cn.bing.com", Market: "zh-CN"},
 			{Name: "searxng", Type: "searxng", Enabled: boolPtr(false), Weight: 1.1, BaseURL: "http://127.0.0.1:8888"},
 			{Name: "ddg", Type: "duckduckgo", Enabled: boolPtr(false), Weight: 0.8, BaseURL: "https://html.duckduckgo.com"},
 		},
@@ -435,6 +454,31 @@ func (c *Config) Normalize() error {
 				return fmt.Errorf("provider %q: invalid base_url %q", p.Name, p.BaseURL)
 			}
 		}
+		p.UserAgent = strings.TrimSpace(p.UserAgent)
+		p.Cookies = strings.TrimSpace(p.Cookies)
+		p.Market = strings.TrimSpace(p.Market)
+		if len(p.Market) > 32 {
+			return fmt.Errorf("provider %q: market too long", p.Name)
+		}
+		extra := make(map[string]string, len(p.ExtraParams))
+		for k, v := range p.ExtraParams {
+			k = strings.TrimSpace(k)
+			if k == "" {
+				continue
+			}
+			extra[k] = strings.TrimSpace(v)
+		}
+		if len(extra) > 0 {
+			p.ExtraParams = extra
+		} else {
+			p.ExtraParams = nil
+		}
+		if p.Referer != "" {
+			p.Referer = strings.TrimSpace(p.Referer)
+			if u, err := url.Parse(p.Referer); err != nil || u.Host == "" {
+				return fmt.Errorf("provider %q: invalid referer %q", p.Name, p.Referer)
+			}
+		}
 	}
 
 	// Key normalization: hash tokens, apply defaults.
@@ -511,7 +555,7 @@ func (c *Config) Validate() error {
 	enabled := 0
 	for _, p := range c.Providers {
 		switch p.Type {
-		case "searxng", "bingrss", "duckduckgo", "brave", "tavily":
+		case "searxng", "bingrss", "binghtml", "duckduckgo", "brave", "tavily":
 		default:
 			return fmt.Errorf("provider %q: unknown type %q", p.Name, p.Type)
 		}
@@ -520,7 +564,7 @@ func (c *Config) Validate() error {
 		}
 		enabled++
 		switch p.Type {
-		case "searxng", "bingrss", "duckduckgo":
+		case "searxng", "bingrss", "binghtml", "duckduckgo":
 			if p.BaseURL == "" {
 				return fmt.Errorf("provider %q (%s): base_url is required", p.Name, p.Type)
 			}

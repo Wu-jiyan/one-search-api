@@ -75,6 +75,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Warm browser sessions (Bing) in the background so the first user request
+	// does not pay for the homepage cookie round-trip.
+	for _, src := range sources {
+		if w, ok := src.Prov.(provider.Warm); ok {
+			go func(name string, w provider.Warm) {
+				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+				defer cancel()
+				start := time.Now()
+				w.Warm(ctx)
+				logger.Debug("provider warm-up finished", "provider", name, "elapsed_ms", time.Since(start).Milliseconds())
+			}(src.Name, w)
+		}
+	}
+
 	fetchService := fetchsvc.New(cfg, metrics)
 	searchService := search.New(cfg, sources, fetchService, metrics, logger)
 	authn := auth.New(cfg.Auth)

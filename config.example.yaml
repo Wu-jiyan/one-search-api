@@ -34,13 +34,13 @@ auth:
       burst: 10
       daily_quota: 1500
       max_results: 20
-      allowed_providers: [searxng, bing]
+      allowed_providers: [bing, searxng]
 
 search:
   default_count: 10
   max_count: 50
   overall_timeout: 12s        # 上游扇出总预算
-  provider_timeout: 2500ms    # 单个 provider 预算
+  provider_timeout: 2500ms    # 单个 provider 预算（Bing 渠道建议在 providers 里单独放宽）
   max_concurrency: 32         # 全局并发请求闸门
   need_content_max_results: 10
   content_fetch_timeout: 8s
@@ -48,7 +48,7 @@ search:
   per_domain_limit: 3
   cache_ttl: 5m
   site_icon_template: "https://{host}/favicon.ico"
-  # 已有足够结果后，最多再等这么久就放弃慢 provider（0 或注释掉 = 800ms）
+  # 已有足够结果后，最多再等慢 provider 多久就放弃（0 或注释掉 = 800ms）
   hedge_delay: 800ms
 
 fetch:
@@ -62,6 +62,66 @@ fetch:
   min_content_runes: 120
 
 providers:
+  # ============================ Bing 渠道 ============================
+  # Bing RSS 与 HTML 是同一个搜索后端的两种渲染：同一 query 下结果集完全一致。
+  #   - bingrss  ：约 5KB，自带发布时间（date 字段更完整），推荐作为默认渠道。
+  #   - binghtml ：约 100KB，摘要/日期结构更全，适合需要精细解析时使用。
+  #
+  # 国内版：cn.bing.com + market zh-CN；国际版：www.bing.com + market en-WW。
+  # 即「2 种类型 × 2 个市场 = 4 个渠道」，按需启用；同版 rss+html 同时开收益不大
+  # （同一批结果会双源融合）。
+  #
+  # 反爬与稳定性（均自动处理，一般无需配置）：
+  #   - 每次会话随机生成 Chrome 指纹（UA / sec-ch-ua / 平台），失败时自动轮换；
+  #   - 首次请求前访问首页预热，拿到 MUID/_EDGE_S/SRCHD 等真实 cookie；
+  #   - 带 Referer、Accept-Language、Sec-Fetch-* 与真实搜索参数（form/QBLH/cvid/sc…）；
+  #   - RSS 返回空 channel（软限流）时同渠道重试 → 仍失败则回退解析 HTML；
+  #   - 结果明显离题（Bing 偶发回放别的 query 缓存）时整批丢弃并重试。
+
+  - name: bing                 # 国内版 RSS（默认渠道）
+    type: bingrss
+    enabled: true
+    weight: 0.9
+    base_url: "https://cn.bing.com"
+    market: "zh-CN"
+    timeout: 6s                # 预热 + 搜索 + 可能的同渠道重试
+    rpm: 30
+    # warmup: true             # 首页预热（默认 true）
+    # mobile: false            # true = 移动端 UA + LBT003/PC/scope 参数（移动 HTML 每页仅 5 条）
+    # user_agent: ""           # 留空 = 每次会话随机生成；填写则固定
+    # referer: ""              # 留空 = base_url 首页
+    # cookies: ""              # 手动附加 Cookie（预热已能拿到真实 cookie，一般不需要）
+    # extra_params: {}         # 追加任意查询参数
+
+  - name: bing-html            # 国内版 HTML
+    type: binghtml
+    enabled: false
+    weight: 0.9
+    base_url: "https://cn.bing.com"
+    market: "zh-CN"
+    timeout: 6s
+    rpm: 20
+
+  - name: bing-intl            # 国际版 RSS（部署在境外时用这个）
+    type: bingrss
+    enabled: false
+    weight: 0.9
+    base_url: "https://www.bing.com"
+    market: "en-WW"
+    timeout: 6s
+    rpm: 30
+
+  - name: bing-intl-html       # 国际版 HTML
+    type: binghtml
+    enabled: false
+    weight: 0.9
+    base_url: "https://www.bing.com"
+    market: "en-WW"
+    timeout: 6s
+    rpm: 20
+
+  # ============================ 其它渠道 ============================
+
   # SearXNG：需要在其 settings.yml 的 search.formats 中开启 json
   - name: searxng
     type: searxng
@@ -71,15 +131,6 @@ providers:
     token: ""                 # SearXNG 若启用 token 鉴权则填写
     rpm: 120
     timeout: 3s
-
-  # Bing RSS：无需 Key；注意微软声明其仅限个人非商业用途
-  - name: bing
-    type: bingrss
-    enabled: true
-    weight: 0.9
-    base_url: "https://cn.bing.com"
-    rpm: 30
-    timeout: 2500ms
 
   # DuckDuckGo HTML：无需 Key，但可能触发验证码；中国大陆网络通常不可达，默认关闭
   - name: ddg

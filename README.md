@@ -1,7 +1,7 @@
 # one-search-api
 
 自托管、与 **DeepSeek Search / Fetch API 格式兼容**的搜索与抓取服务。
-用 Go 写成单二进制，后端聚合免费搜索源（SearXNG / Bing RSS / DuckDuckGo / Brave / Tavily），
+用 Go 写成单二进制，后端聚合免费搜索源（SearXNG / Bing 国内版与国际版 / DuckDuckGo / Brave / Tavily），
 对外暴露和 DeepSeek 一样的两个接口：
 
 ```
@@ -31,7 +31,7 @@ POST /v1/tools/fetch    → {"title":"...","content":"# Markdown 正文"}
 | 能力 | 说明 |
 |---|---|
 | 格式兼容 | 两个端点的请求/响应形状、可空字段语义、OpenAI 风格错误信封 |
-| 多源聚合 | SearXNG、Bing RSS、DuckDuckGo HTML、Brave、Tavily，可单启用/加权/限速 |
+| 多源聚合 | SearXNG、Bing（国内/国际 × RSS/HTML）、DuckDuckGo、Brave、Tavily，可单启用/加权/限速 |
 | 检索管线 | URL 归一化 → 去重 → RRF 融合 → 域名多样性 → 启发式打分 → 字段富化 |
 | 内容抓取 | readability + HTML→Markdown、charset 嗅探、缓存、`need_content` 并发补正文 |
 | 鉴权与配额 | 每 Key：RPM 令牌桶、每日配额、provider 白名单、最大返回条数 |
@@ -90,8 +90,10 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8080/v1/tools/search `
 }
 ```
 
-> 注意：免费的 Bing RSS 对中文/混合语言长尾 query 的结果质量一般，且高频请求会被限流。
-> 想要稳定质量，请用下面的 SearXNG 部署。
+> **Bing 渠道说明**：RSS 与 HTML 是同一个搜索后端的两种渲染，**同一 query 的结果集完全一致**，
+> 不存在「RSS 质量差」。真正的坑是 Bing 偶发返回 `200 + 空 channel`（软限流），或者
+> **串回别的 query 的缓存结果**。本服务对这两种情况分别用「同渠道重试 + HTML 回退」和
+> 「批次相关性共识过滤」兜底，详见下方 [Bing 渠道与指纹](#bing-渠道与指纹国内版--国际版)。
 
 ---
 
@@ -166,10 +168,43 @@ auth:
 | type | 需要 Key | 说明 |
 |---|---|---|
 | `searxng` | 否（可选 token） | **推荐主源**；需在 SearXNG `settings.yml` 的 `search.formats` 中加 `json` |
-| `bingrss` | 否 | 无需 Key；微软声明仅限个人非商业用途；结果质量不稳定、易被限流 |
+| `bingrss` | 否 | Bing 国内/国际版 RSS；约 5 KB，`date` 字段最全，**默认渠道**；空 channel 自动重试，失败回退 HTML |
+| `binghtml` | 否 | Bing 国内/国际版 HTML；约 100 KB，摘要结构更全 |
 | `duckduckgo` | 否 | 解析 HTML；可能触发人机验证；**中国大陆网络通常不可达** |
 | `brave` | 是 | 免费 2000 次/月，质量好 |
 | `tavily` | 是 | 免费 1000 次/月，自带摘要能力 |
+
+### Bing 渠道与指纹（国内版 / 国际版）
+
+Bing 的 RSS 与 HTML 共用一套搜索后端，区别只是渲染方式：
+
+| 渠道 | 体积 | 特点 |
+|---|---|---|
+| `bingrss` | ~5 KB | 自带 `pubDate`，`date` 字段更完整；默认 |
+| `binghtml` | ~100 KB | `.b_caption` 摘要、`.news_dt` 日期，结构更全 |
+
+「4 个渠道」= 2 种类型 × 2 个市场，用 4 个 provider 实例表达：
+
+```yaml
+- {name: bing,           type: bingrss,  base_url: https://cn.bing.com,  market: zh-CN}
+- {name: bing-html,      type: binghtml, base_url: https://cn.bing.com,  market: zh-CN}
+- {name: bing-intl,      type: bingrss,  base_url: https://www.bing.com, market: en-WW}
+- {name: bing-intl-html, type: binghtml, base_url: https://www.bing.com, market: en-WW}
+```
+
+> `cn.bing.com` 在中国大陆以外会 **301 到 `www.bing.com`**（并改写路径），所以境外部署请直接配
+> `www.bing.com`；反之在国内请用 `cn.bing.com`。
+
+**自动反爬（默认开启，无需配置）**
+
+- 每个 provider 独立会话：**启动时后台预热**（失效后自动重预热）访问首页，拿到 `MUID / _EDGE_S / SRCHD / SRCHUSR / SRCHUID / _SS` 等真实 cookie；
+- 每次会话**随机生成**浏览器指纹：UA（Windows / macOS / Linux 随机 + Chrome 主版本）、`sec-ch-ua`、平台、Accept-Language、32 位大写 `cvid`；
+- 搜索 URL 带真实参数：`form=QBLH&sp=-1&lq=0&pq=<上次查询>&sc=<生成值>&qs=n&sk=&cvid=…&ghsh=0&ghacc=0&ghpl=`，以及 `setmkt=`、`Referer`、`Sec-Fetch-*`；
+- `mobile: true` 切移动端指纹：移动 UA + `PC=EMMX01&form=LBT003&scope=web&darkschemeovr=1`。实测移动端 HTML 每页只有 5 条，所以默认桌面；RSS 不受影响；
+- 空结果、出错或结果离题时**轮换指纹与 cookie** 并同渠道重试，仍失败则 RSS 回退到 HTML 解析；
+- 结果整批离题（Bing 回放别的 query 缓存）会被 **批次相关性过滤** 丢弃，不污染最终排序。
+
+可手动覆盖：`user_agent` / `referer` / `cookies` / `mobile` / `warmup: false` / `extra_params`（任意附加参数）。
 
 ---
 
@@ -239,11 +274,12 @@ auth:
 ```
 onesearch_requests_total{endpoint,status}
 onesearch_request_duration_seconds{endpoint}
-onesearch_provider_requests_total{provider,outcome}
-onesearch_provider_breaker_state{provider}   # 由 /healthz 暴露
+onesearch_provider_requests_total{provider,outcome}  # ok/error/hedged/stale_dropped/rate_limited/breaker_open
+onesearch_provider_breaker_state{provider}           # 由 /healthz 暴露
 onesearch_fetch_total{status}
 onesearch_cache_hits_total{kind}
 onesearch_rate_limited_total{reason}
+onesearch_results_filtered_total                     # 离题结果被过滤的条数
 ```
 
 ---
@@ -260,7 +296,9 @@ onesearch_rate_limited_total{reason}
 
 已知合规注意：
 
-- **Bing RSS** 的版权声明写明「仅限个人非商业用途在 RSS 聚合器中呈现」。自用没问题，公开托管需自行评估。
+- **Bing**：微软对 RSS 结果的版权声明写明「仅限个人非商业用途在 RSS 聚合器中呈现」；HTML/RSS
+  抓取也会受其反爬与使用条款约束。自用风险较低，**公开托管或商业化需自行评估合规**。
+- 本服务只做「像真实浏览器一样请求 + 失败重试」，不破解验证码、不绕过付费墙；被挑战时降级返回。
 - **DuckDuckGo** 解析 HTML 可能违反其 ToS；访问量大了会被验证码拦截。
 - **SearXNG** 本身是 AGPL 软件，自托管没问题，但它也可能被上游引擎封 IP。
 
@@ -271,8 +309,12 @@ onesearch_rate_limited_total{reason}
 ```bash
 go vet ./...
 go test ./...
-go test -race ./...      # 建议
+go test -race ./...      # 建议（Linux/WSL）
 go build -o onesearch ./cmd/onesearch
+
+# 真实网络冒烟（可选）
+go test ./internal/provider -tags live -run TestLiveBingCN -v -count=1
+ONESEARCH_LIVE_INTL=1 go test ./internal/provider -tags live -run TestLiveBingIntl -v -count=1  # 需在境外机器执行
 ```
 
 项目结构：
@@ -290,7 +332,7 @@ internal/fetchsvc/        抓取编排与缓存
 internal/httpx/           线协议类型与错误信封
 internal/limit/           令牌桶、信号量、熔断器
 internal/obs/             日志与指标
-internal/provider/        5 个搜索源实现
+internal/provider/        搜索源实现（Bing 会话/指纹、SearXNG、DDG、Brave、Tavily）
 internal/query/           搜索语法解析
 internal/rank/            归一化、去重、RRF 融合、打分
 internal/search/          并发扇出、hedge、正文补齐
@@ -302,7 +344,9 @@ docs/DESIGN.md            设计文档（契约、字段映射、验收标准）
 
 ## 已知限制
 
-- 免费源不稳定：Bing RSS 质量波动且会被限流；DDG 在部分网络不可达；SearXNG 依赖自建实例。
+- Bing 会偶发 `200 + 空 channel` 软限流和「回放别的 query 缓存」；已用同渠道重试、HTML 回退、批次相关性过滤兜底，极端情况下仍可能少几条结果。
+- `cn.bing.com` 在中国大陆以外会 301 到国际版；境外部署请配 `www.bing.com`。
+- DDG 在部分网络不可达；SearXNG 依赖自建实例。
 - 无 JS 渲染；无 LLM 摘要/语义重排；无 GeoIP。
 - 配额与缓存驻留内存，重启清零；多实例部署时各实例独立计数。
 - 不保证跟随 DeepSeek 未来 schema 变更。

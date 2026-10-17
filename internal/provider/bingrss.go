@@ -6,23 +6,22 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
-	"strconv"
-	"strings"
 
 	"github.com/wujiyan/one-search-api/internal/query"
 )
 
+// bingRSS uses Bing's RSS rendering of the same result set as the HTML page.
+// It is much lighter (about 5 KB vs 100 KB) and is the default Bing channel.
 type bingRSS struct {
-	name    string
-	base    string
-	headers map[string]string
-	region  string
-	client  *http.Client
+	name string
+	sess *bingSession
 }
 
 func (b *bingRSS) Name() string { return b.name }
 func (b *bingRSS) Type() string { return "bingrss" }
+
+// Warm pre-warms the browser session (called at startup).
+func (b *bingRSS) Warm(ctx context.Context) { b.sess.Warm(ctx) }
 
 type rssDocument struct {
 	XMLName xml.Name `xml:"rss"`
@@ -36,31 +35,62 @@ type rssDocument struct {
 	} `xml:"channel"`
 }
 
+// Search retries the RSS channel once with a freshly generated browser identity,
+// then falls back to parsing the HTML page. Bing soft-blocks bot-like requests
+// with HTTP 200 and a valid but empty <channel>, so an empty parse is treated as
+// a retryable condition rather than "no results".
 func (b *bingRSS) Search(ctx context.Context, q query.Query) ([]Result, error) {
-	params := url.Values{}
-	params.Set("q", q.EngineString())
-	params.Set("format", "rss")
-	if q.Count > 0 {
-		params.Set("count", strconv.Itoa(min(q.Count, 30)))
-	}
-	if len(q.Langs) > 0 {
-		params.Set("setlang", q.Langs[0])
-	}
-	if b.region != "" {
-		params.Set("cc", b.region)
+	var lastErr error
+	var lastResults []Result
+	for attempt := 0; attempt < 2; attempt++ {
+		res, err := b.once(ctx, q)
+		if err != nil {
+			lastErr = err
+		} else if len(res) > 0 {
+			lastResults = res
+			if !suspiciousResults(res, q) {
+				return res, nil
+			}
+			debugf("bingrss attempt=%d results=%d look off-topic, retrying", attempt+1, len(res))
+		}
+		debugf("bingrss attempt=%d results=%d err=%v", attempt+1, len(res), err)
+		if attempt == 0 {
+			b.sess.invalidate()
+			b.sess.waitRetry(ctx, attempt)
+			if ctx.Err() != nil {
+				break
+			}
+		}
 	}
 
-	endpoint := strings.TrimRight(b.base, "/") + "/search?" + params.Encode()
-	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, err
+	res, herr := bingHTMLResults(ctx, b.sess, q, b.name)
+	if herr == nil && len(res) > 0 {
+		if !suspiciousResults(res, q) {
+			debugf("bingrss recovered %d results via HTML fallback", len(res))
+			return res, nil
+		}
+		if len(lastResults) == 0 {
+			lastResults = res
+		}
 	}
-	req.Header.Set("Accept", "application/rss+xml, application/xml;q=0.9, */*;q=0.1")
-	for k, v := range b.headers {
-		req.Header.Set(k, v)
+	if herr != nil {
+		debugf("bingrss HTML fallback failed: %v", herr)
 	}
+	if len(lastResults) > 0 {
+		return lastResults, nil
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	if herr != nil {
+		return nil, herr
+	}
+	return nil, nil
+}
 
-	resp, err := b.client.Do(req.WithContext(ctx))
+func (b *bingRSS) once(ctx context.Context, q query.Query) ([]Result, error) {
+	target := b.sess.searchURL(q, "", true)
+	resp, err := b.sess.get(ctx, target, "application/rss+xml, application/xml;q=0.9, */*;q=0.1")
 	if err != nil {
 		return nil, fmt.Errorf("bingrss: %w", err)
 	}
@@ -72,16 +102,17 @@ func (b *bingRSS) Search(ctx context.Context, q query.Query) ([]Result, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("bingrss: upstream status %d", resp.StatusCode)
 	}
-	trimmed := strings.TrimSpace(string(body))
-	if !strings.HasPrefix(trimmed, "<?xml") && !strings.HasPrefix(trimmed, "<rss") {
-		// Bing sometimes answers with an HTML error/interstitial page.
-		return nil, fmt.Errorf("bingrss: unexpected content type %q", resp.Header.Get("Content-Type"))
+	trimmed := trimSpaceBytes(body)
+	if !hasPrefix(trimmed, "<?xml") && !hasPrefix(trimmed, "<rss") {
+		return nil, fmt.Errorf("bingrss: unexpected content %q", resp.Header.Get("Content-Type"))
 	}
 
 	var doc rssDocument
 	if err := xml.Unmarshal(body, &doc); err != nil {
 		return nil, fmt.Errorf("bingrss: decode xml: %w", err)
 	}
+	b.sess.noteQuery(q.EngineString())
+	debugf("bingrss url=%q bytes=%d structItems=%d", target, len(body), len(doc.Channel.Items))
 
 	out := make([]Result, 0, len(doc.Channel.Items))
 	for _, item := range doc.Channel.Items {
@@ -103,4 +134,19 @@ func (b *bingRSS) Search(ctx context.Context, q query.Query) ([]Result, error) {
 		})
 	}
 	return out, nil
+}
+
+func trimSpaceBytes(b []byte) string {
+	start, end := 0, len(b)
+	for start < end && (b[start] == ' ' || b[start] == '\n' || b[start] == '\r' || b[start] == '\t') {
+		start++
+	}
+	for end > start && (b[end-1] == ' ' || b[end-1] == '\n' || b[end-1] == '\r' || b[end-1] == '\t') {
+		end--
+	}
+	return string(b[start:end])
+}
+
+func hasPrefix(s, prefix string) bool {
+	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
 }

@@ -1,7 +1,7 @@
 # One Search API — 设计文档（v1）
 
 自托管、与 DeepSeek **Search / Fetch API** 请求与响应格式兼容的搜索抓取后端。
-用 Go 实现，单二进制，免费搜索源聚合（SearXNG / Bing RSS / DuckDuckGo / Brave / Tavily）。
+用 Go 实现，单二进制，免费搜索源聚合（SearXNG / Bing 国内版与国际版 / DuckDuckGo / Brave / Tavily）。
 
 定位（B 形态）：**自己用 + 少数朋友用**。不做计费、不做多租户数据库，但必须有身份、配额、
 并发闸门和反滥用；配额与限流状态全部驻留内存，进程重启即清零（明确接受）。
@@ -14,7 +14,7 @@
 
 1. `POST /v1/tools/search`、`POST /v1/tools/fetch` 与 DeepSeek 官方接口的**请求/响应形状兼容**，
    客户端只需把 base_url 换成本服务。
-2. 免费源聚合：SearXNG、Bing RSS、DuckDuckGo HTML、Brave、Tavily 可单独启用/加权。
+2. 免费源聚合：SearXNG、Bing（国内/国际 × RSS/HTML）、DuckDuckGo、Brave、Tavily 可单独启用/加权。
 3. 每个 API Key 独立配额（RPM + 每日次数）、可选 provider 白名单、最大返回条数。
 4. 抗滥用：请求体大小、字段长度、URL 校验、SSRF 防护、并发上限、上游熔断。
 5. 可观测：结构化日志、`/healthz`、Prometheus 文本指标。
@@ -181,15 +181,43 @@ type Provider interface {
 - 单 provider 超时（默认 2.5s），失败不阻塞整体，结果集允许部分为空。
 - 每个 provider 独立令牌桶（RPM）+ 熔断器（连续失败 N 次打开，冷却后半开）。
 
+Bing 两个渠道额外共享一套 `bingSession`（§4.1）：首页预热 cookie、生成式浏览器指纹、
+真实搜索参数、失败轮换、同渠道重试与 HTML 回退。
+
 | type | 端点 | 鉴权 | 产出 | 备注 |
 |---|---|---|---|---|
 | `searxng` | `GET {base}/search?format=json` | 可选 `X-Token` | title/url/content/publishedDate/score/favicon | 需在 SearXNG settings.yml 开启 `json` 格式 |
-| `bingrss` | `GET {base}/search?format=rss` | 无 | title/link/description/pubDate | 官方声明仅限个人非商业用途；默认 base `https://cn.bing.com` |
+| `bingrss` | `GET {base}/search?…&format=rss` | 无 | title/link/description/pubDate | 约 5KB，date 最全；空 channel 重试 + HTML 回退；默认渠道 |
+| `binghtml` | `GET {base}/search?…` | 无 | `li.b_algo` 的 title/url/caption/news_dt | 约 100KB，摘要结构更全；被挑战时轮换指纹重试 |
 | `duckduckgo` | `POST {base}/html/` | 无 | title/url/snippet | 解析 `result__a` / `result__snippet`；易触发验证码，默认权重低 |
 | `brave` | `GET https://api.search.brave.com/res/v1/web/search` | `X-Subscription-Token` | title/url/description/age/page_age | 免费 2000 次/月，需自备 key |
 | `tavily` | `POST https://api.tavily.com/search` | `Authorization: Bearer` | title/url/content/published_date | 免费 1000 次/月，需自备 key |
 
+国内版/国际版不是独立 type：用 `base_url`（`cn.bing.com` / `www.bing.com`）+ `market`
+（`zh-CN` / `en-WW`）表达，因此「2 类型 × 2 市场 = 4 渠道」由 4 个 provider 实例组成。
+
 新增 provider：实现接口 + 在 `provider.New` 注册 type 即可，不改编排层。
+
+### 4.1 Bing 会话、指纹与重试
+
+实测结论（2026-10）：**Bing RSS 与 HTML 是同一搜索后端的两种渲染，同 query 结果集一致**；
+差异只在体积与字段结构。真正的稳定性问题是两种 Bing 行为：
+
+1. 软限流：HTTP 200 + 合法但**空的 `<channel>`**（bot 判定），对 `Go-http-client/1.1` 这类 UA 尤其明显。
+2. 缓存回放：偶发返回**别的 query 的缓存结果**（实测海外查出「Go context」却混进越南美食）。
+
+应对（`internal/provider/bingsession.go`）：
+
+| 机制 | 说明 |
+|---|---|
+| 首页预热 | 启动时后台预热（失效后自动重预热）GET `{base}/`，让 Bing 下发 `MUID/_EDGE_S/SRCHD/SRCHUSR/SRCHUID/_SS` 等 cookie（TTL 30min） |
+| 生成式指纹 | 每次会话随机生成：UA（Windows/macOS/Linux + Chrome 主版本）、`sec-ch-ua`/platform/mobile hints、Accept-Language、32 位大写 `cvid`；可被 `user_agent` 固定 |
+| 真实参数 | 桌面：`form=QBLH&sp=-1&lq=0&pq=<上次查询>&sc=<生成>&qs=n&sk=&cvid=…&ghsh=0&ghacc=0&ghpl=`；移动：`PC=EMMX01&form=LBT003&scope=web&darkschemeovr=1`；再叠加 `setmkt`/`setlang`/`cc`/`extra_params` |
+| 轮换 | 空结果、错误、离题时 `invalidate()`：换指纹 + 换 cookie jar + 重新预热，再重试一次 |
+| 回退 | RSS 两次仍失败/离题 → 解析同一 query 的 HTML 页（同一后端，结果一致） |
+| 离题检测 | 结果命中 query 词元的比例 < 20% 且 query 词元 ≥ 2 时判定可疑，触发重试 |
+
+`mobile: true` 会同时切移动 UA 与移动参数；实测移动 HTML 每页只有 5 条 b_algo，故默认桌面。
 
 ---
 
@@ -199,13 +227,16 @@ type Provider interface {
 2. **Hedge（防慢源拖垮延迟）**：当已收到的结果数达到 `max(1, min(5, count/2))` 时启动 `hedge_delay`
    （默认 800ms）计时器；计时器到期即取消剩余未返回的 provider。被 hedge 取消的 provider 记为
    `outcome="hedged"`，不计熔断失败。这也意味着结果可能少一两个来源的贡献，是延迟与召回率的显式取舍。
-3. **URL 归一化**：小写 host、去 fragment、去跟踪参数（`utm_*`/`fbclid`/`gclid`/`spm`/`ref`）、
+3. **离题批次过滤（质量兜底）**：多 provider 时先算每批「命中 query 词元的结果占比」；若某批 < 20%
+   而另有批次 ≥ 50%，整批丢弃并记 `outcome="stale_dropped"`，避免 Bing 缓存回放污染排序。
+   单 provider 时若整体占比 < 20% 且词元 ≥ 2，则逐条过滤离题项（全被过滤时保留原集合，防止空页）。
+4. **URL 归一化**：小写 host、去 fragment、去跟踪参数（`utm_*`/`fbclid`/`gclid`/`spm`/`ref`）、
    去尾部 `/`、解包已知跳转（Google `/url?q=`、Bing `/ck/a`、DDG `/l/?uddg=`）。
-4. **去重**：同 canonical URL 合并；同 host + 归一化标题相同合并；保留先出现者并合并来源与摘要。
-5. **融合**：RRF `score += weight(engine) / (60 + rank)`；再叠加标题命中、精确短语、`site:` 命中、
+5. **去重**：同 canonical URL 合并；同 host + 归一化标题相同合并；保留先出现者并合并来源与摘要。
+6. **融合**：RRF `score += weight(engine) / (60 + rank)`；再叠加标题命中、精确短语、`site:` 命中、
    时效衰减、authority 先验，映射到 [0,3]（见 §6）。
-6. **多样性**：同一注册域最多 `search.per_domain_limit`（默认 3）条，超出的延后。
-7. **截断**：排序后取 `count` 条；`count` 上限受 Key 的 `max_results` 与服务器 `search.max_count` 双重约束。
+7. **多样性**：同一注册域最多 `search.per_domain_limit`（默认 3）条，超出的延后。
+8. **截断**：排序后取 `count` 条；`count` 上限受 Key 的 `max_results` 与服务器 `search.max_count` 双重约束。
 
 ---
 
@@ -313,8 +344,9 @@ score  = clamp(3*(raw+boost), 0, 3)
 - `GET /metrics`：Prometheus 文本（无鉴权，建议仅内网暴露）：
   `onesearch_requests_total{endpoint,status}`、`onesearch_request_duration_seconds{endpoint}`、
   `onesearch_provider_requests_total{provider,outcome}`、`onesearch_provider_breaker_state{provider}`、
-  `onesearch_results_returned_total`、`onesearch_fetch_total{status}`、
+  `onesearch_results_returned_total`、`onesearch_results_filtered_total`、`onesearch_fetch_total{status}`、
   `onesearch_cache_hits_total{kind}`、`onesearch_rate_limited_total{reason}`、`onesearch_inflight`。
+  provider `outcome` 取值：`ok` / `error` / `hedged` / `stale_dropped` / `rate_limited` / `breaker_open` / `skipped`。
 
 ---
 
@@ -328,6 +360,18 @@ score  = clamp(3*(raw+boost), 0, 3)
 默认配置只启用 `bingrss`（无需 Key 即可开箱使用）；`searxng`、`duckduckgo` 默认关闭。
 `search.hedge_delay` 控制「已有足够结果后最多再等慢源多久」，默认 800ms。
 
+provider 级 Browser 指纹字段（Bing/DDG 生效，其余类型忽略）：
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `market` | `""` | `setmkt=` 取值（`zh-CN` / `en-WW`…），同时决定 Accept-Language |
+| `mobile` | `false` | 移动 UA + `PC=EMMX01&form=LBT003&scope=web&darkschemeovr=1` |
+| `warmup` | `true` | 首次请求前访问首页拿 cookie |
+| `user_agent` | `""` | 留空 = 每次会话随机生成 Chrome UA；填写则固定 |
+| `referer` | `""` | 留空 = `base_url` 首页 |
+| `cookies` | `""` | 手动附加 Cookie（与预热 jar 合并） |
+| `extra_params` | `{}` | 追加任意查询参数 |
+
 启动时严格校验：未知 provider type、重复 Key 名、空 Key、非法时长、无可用 provider 均直接退出并打印原因。
 
 ---
@@ -337,6 +381,7 @@ score  = clamp(3*(raw+boost), 0, 3)
 - 单二进制：`go build -o onesearch ./cmd/onesearch && ./onesearch -config config.yaml`。
 - Docker Compose：`onesearch` + `searxng`（内置最小 settings，开启 json 格式）。
 - 无 SearXNG 也能跑：默认只启用 `bingrss`；compose 中通过 `ONESEARCH_SEARXNG_URL` 启用 SearXNG。
+- 国内部署用 `cn.bing.com`，境外部署用 `www.bing.com`：`cn.bing.com` 在中国大陆以外会 301 到国际版并改写路径。
 
 ---
 
@@ -352,7 +397,7 @@ score  = clamp(3*(raw+boost), 0, 3)
 | 无 Bearer / 错 Key | 401 |
 | RPM 超限 | 429 + `Retry-After` |
 | 每日配额耗尽 | 402 |
-| Key 白名单不含 provider | 403 |
+| Key 白名单 | 过滤不可用 provider，不报错；全过滤时 200 + `[]` |
 | need_content=true | 结果 `content` 非空（假页面服务器）；失败时 `""` |
 | fetch 正常 | 200 `{title,content}`，content 为 Markdown |
 | fetch 私网/loopback/`file://`/带 userinfo | 403 / 400 |
@@ -363,6 +408,10 @@ score  = clamp(3*(raw+boost), 0, 3)
 | 慢 provider 触发 hedge | 已有足够结果时在 `hedge_delay` 后返回，不等待慢源 |
 | 熔断打开 | provider 请求快速失败，整体仍 200 |
 | 并发闸门 | 超出并发返回 429 |
+| Bing 空 channel | 同渠道换指纹重试一次；仍空则回退 HTML 解析 |
+| Bing 离题缓存 | 批次相关性 < 20% 而其它批次 ≥ 50% 时整批丢弃 |
+| UA 指纹 | 请求头不含 `Go-http-client/1.1`；会话轮换后 UA/cvid/平台变化 |
+| Bing 预热 | 首次请求前访问首页，搜索请求带 `MUID` 等 cookie 与 `Referer` |
 | 搜索结果字段语义 | 逐字段断言：空串 vs null、分数范围、日期格式 |
 
 ---
@@ -371,11 +420,13 @@ score  = clamp(3*(raw+boost), 0, 3)
 
 1. 分数与摘要为启发式，与官方不可比（§6）。
 2. `after:`/`before:` 依赖结果自带日期，部分引擎无日期 → 过滤不完整。
-3. 免费源不稳定：Bing RSS 有非商业用途限制，且对中文/混合语言长尾 query 的结果质量差、高频会被限流
-   （实测同一 query 短时间内可能返回空 channel）；DDG 在中国大陆网络通常不可达。公开托管需自行评估合规。
-4. Hedge 会牺牲少量召回：慢源在 `hedge_delay` 到期后被取消，其贡献不会进入融合结果。
-5. 无 JS 渲染；SPA 页面抓取失败率高于官方。
-6. 配额状态驻留内存，重启清零；多实例部署时各实例独立计数。
+3. 免费源不稳定：Bing 偶发 `200 + 空 channel` 软限流、偶发回放其它 query 的缓存结果；已用
+   同渠道重试 + HTML 回退 + 批次相关性过滤兜底，极端情况下仍可能少结果。微软对 RSS 结果的版权声明
+   仅限个人非商业用途，公开托管需自行评估合规。DDG 在中国大陆网络通常不可达。
+4. `cn.bing.com` 在中国大陆以外会 301 到国际版；境外部署需改用 `www.bing.com`。
+5. Hedge 会牺牲少量召回：慢源在 `hedge_delay` 到期后被取消，其贡献不会进入融合结果。
+6. 无 JS 渲染；SPA 页面抓取失败率高于官方。
+7. 配额状态驻留内存，重启清零；多实例部署时各实例独立计数。
 7. 无 `localization` 地理定位。
 8. 不保证官方未来 schema 变更的自动跟进。
 
