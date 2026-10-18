@@ -191,9 +191,9 @@ func Default() *Config {
 			OverallTimeout:          Duration(12 * time.Second),
 			ProviderTimeout:         Duration(2500 * time.Millisecond),
 			MaxConcurrency:          32,
-			NeedContentMaxResults:   20,
-			ContentFetchTimeout:     Duration(6 * time.Second),
-			ContentFetchConcurrency: 8,
+			NeedContentMaxResults:   50,
+			ContentFetchTimeout:     Duration(10 * time.Second),
+			ContentFetchConcurrency: 16,
 			PerDomainLimit:          3,
 			CacheTTL:                Duration(5 * time.Minute),
 			SiteIconTemplate:        "https://{host}/favicon.ico",
@@ -366,13 +366,13 @@ func (c *Config) Normalize() error {
 		c.Search.MaxConcurrency = 32
 	}
 	if c.Search.NeedContentMaxResults <= 0 {
-		c.Search.NeedContentMaxResults = 20
+		c.Search.NeedContentMaxResults = 50
 	}
 	if c.Search.ContentFetchTimeout.D() <= 0 {
-		c.Search.ContentFetchTimeout = Duration(6 * time.Second)
+		c.Search.ContentFetchTimeout = Duration(10 * time.Second)
 	}
 	if c.Search.ContentFetchConcurrency <= 0 {
-		c.Search.ContentFetchConcurrency = 8
+		c.Search.ContentFetchConcurrency = 16
 	}
 	if c.Search.PerDomainLimit <= 0 {
 		c.Search.PerDomainLimit = 3

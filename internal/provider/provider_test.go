@@ -311,3 +311,77 @@ func TestUnknownType(t *testing.T) {
 		t.Fatal("expected error for unknown type")
 	}
 }
+
+// TestSearXNGPagination locks the multi-page fan-out that lets count>20 fill.
+func TestSearXNGPagination(t *testing.T) {
+	var pages []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		page := r.URL.Query().Get("pageno")
+		pages = append(pages, page)
+		w.Header().Set("Content-Type", "application/json")
+		switch page {
+		case "1":
+			_, _ = w.Write([]byte(`{"results":[
+				{"url":"https://example.com/1","title":"A"},
+				{"url":"https://example.com/2","title":"B"}]}`))
+		case "2":
+			_, _ = w.Write([]byte(`{"results":[
+				{"url":"https://example.com/3","title":"C"},
+				{"url":"https://example.com/4","title":"D"}]}`))
+		default:
+			_, _ = w.Write([]byte(`{"results":[]}`))
+		}
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, config.ProviderConfig{Name: "searxng", Type: "searxng", BaseURL: srv.URL})
+	q := mustQ(t, "hello")
+	q.Count = 4
+	res, err := p.Search(context.Background(), q)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(res) != 4 {
+		t.Fatalf("results = %d, want 4 (pages=%v)", len(res), pages)
+	}
+	if len(pages) != 2 {
+		t.Errorf("pages requested = %v, want two", pages)
+	}
+	if res[0].Rank != 1 || res[3].Rank != 4 {
+		t.Errorf("ranks = %d..%d", res[0].Rank, res[3].Rank)
+	}
+}
+
+// TestBravePagination locks Brave's page-offset paging.
+func TestBravePagination(t *testing.T) {
+	var offsets []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		offsets = append(offsets, r.URL.Query().Get("offset"))
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Query().Get("offset") {
+		case "":
+			_, _ = w.Write([]byte(`{"web":{"results":[
+				{"title":"A","url":"https://example.com/1"},
+				{"title":"B","url":"https://example.com/2"}]}}`))
+		default:
+			_, _ = w.Write([]byte(`{"web":{"results":[
+				{"title":"C","url":"https://example.com/3"},
+				{"title":"D","url":"https://example.com/4"}]}}`))
+		}
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(t, config.ProviderConfig{Name: "brave", Type: "brave", APIKey: "k", BaseURL: srv.URL})
+	q := mustQ(t, "hello")
+	q.Count = 4
+	res, err := p.Search(context.Background(), q)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(res) != 4 {
+		t.Fatalf("results = %d, want 4 (offsets=%v)", len(res), offsets)
+	}
+	if len(offsets) != 2 || offsets[1] == "" {
+		t.Errorf("offsets = %v, want a second paged request", offsets)
+	}
+}

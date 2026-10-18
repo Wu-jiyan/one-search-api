@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/wujiyan/one-search-api/internal/query"
@@ -35,11 +36,55 @@ type searxngResponse struct {
 	UnresponsiveEngines [][]string `json:"unresponsive_engines"`
 }
 
+// Search pages through SearXNG until it has enough results, the upstream stops
+// yielding new URLs, or maxSearxPages is reached. A single SearXNG page returns
+// roughly 10-20 hits, so pagination is what makes count>20 meaningful.
 func (s *searxng) Search(ctx context.Context, q query.Query) ([]Result, error) {
+	want := q.Count
+	if want <= 0 {
+		want = 10
+	}
+	const maxSearxPages = 5
+
+	var out []Result
+	seen := map[string]bool{}
+	var lastErr error
+	for page := 1; page <= maxSearxPages && len(out) < want; page++ {
+		res, err := s.page(ctx, q, page)
+		if err != nil {
+			lastErr = err
+			break
+		}
+		added := 0
+		for _, r := range res {
+			if seen[r.URL] {
+				continue
+			}
+			seen[r.URL] = true
+			out = append(out, r)
+			added++
+		}
+		if added == 0 {
+			break // upstream has nothing new; stop paging
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	if len(out) == 0 && lastErr != nil {
+		return nil, lastErr
+	}
+	for i := range out {
+		out[i].Rank = i + 1
+	}
+	return out, nil
+}
+
+func (s *searxng) page(ctx context.Context, q query.Query, page int) ([]Result, error) {
 	params := url.Values{}
 	params.Set("q", q.EngineString())
 	params.Set("format", "json")
-	params.Set("pageno", "1")
+	params.Set("pageno", strconv.Itoa(page))
 	params.Set("safesearch", "0")
 	if len(q.Langs) > 0 {
 		params.Set("language", q.Langs[0])

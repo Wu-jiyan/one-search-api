@@ -170,8 +170,8 @@ auth:
 
 | type | 需要 Key | 说明 |
 |---|---|---|
-| `searxng` | 否（可选 token） | **推荐主源**；需在 SearXNG `settings.yml` 的 `search.formats` 中加 `json` |
-| `bingrss` | 否 | Bing 国内/国际版 RSS；约 5 KB，`date` 字段最全，**默认渠道**；空 channel 自动重试，失败回退 HTML |
+| `searxng` | 否（可选 token） | **推荐主源**；需在 SearXNG `settings.yml` 的 `search.formats` 中加 `json`；支持 `pageno` 翻页，`count>20` 靠它和 Brave 补满 |
+| `bingrss` | 否 | Bing 国内/国际版 RSS；约 5 KB，`date` 字段最全，**默认渠道**；空 channel 自动重试，失败回退 HTML；每页固定 10 条 |
 | `binghtml` | 否 | Bing 国内/国际版 HTML；约 100 KB，摘要结构更全 |
 | `duckduckgo` | 否 | 解析 HTML；可能触发人机验证；**中国大陆网络通常不可达** |
 | `brave` | 是 | 免费 2000 次/月，质量好 |
@@ -221,7 +221,7 @@ Bing 的 RSS 与 HTML 共用一套搜索后端，区别只是渲染方式：
 | `count` | int | 否 | 1～50，默认 10 |
 | `ori_question` | string/null | 否 | ≤128 字符；v1 仅记录，不参与排序 |
 | `localization` | string | 否 | 接收但忽略（无 GeoIP） |
-| `need_content` | bool | 否 | 为 true 时对前 N 条抓取正文填入 `content`（默认 N=20；官方抓全部） |
+| `need_content` | bool | 否 | 为 true 时对全部结果抓取正文填入 `content`（默认上限 50，与官方一致） |
 
 请求必须带 `Content-Type: application/json`，body 必须是 JSON 对象；鉴权先于参数校验
 （与官方一致：Key 不对时即使 body 非法也返回 401）。
@@ -269,7 +269,7 @@ XML / CSV / PDF / 图片等返回 404。
 3. **`localization` 不生效**（没有 GeoIP 库）。
 4. **`ori_question` 不参与排序**（v1 无 LLM 富化）。
 5. **provider 白名单是过滤，不是报错**：过滤后没有可用源时返回 `{"results":[]}`。
-6. **`need_content` 有上限**：默认只对前 20 条抓正文（官方抓全部），失败的结果 `content` 为 `""`。
+6. **`need_content` 尽力而为**：默认对全部结果抓正文（上限 50），被反爬拦截/超时的结果 `content` 为 `""`（官方也会跳过抓不到的站）。
 7. **乱码查询可能返回空数组**：有离题结果过滤；官方会返回 10 条低分结果。
 8. **`site_icon` 用自有模板**（默认 `<host>/favicon.ico`）；官方统一用
    `https://cdn.deepseek.com/site-icons/<domain>`，可用 `site_icon_template` 改成后者。

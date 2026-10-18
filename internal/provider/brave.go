@@ -38,14 +38,61 @@ type braveResponse struct {
 	} `json:"web"`
 }
 
+// Search pages through Brave's web endpoint. One response carries at most 20
+// results and Brave accepts a 0-based page offset, so count>20 needs several
+// calls.
 func (b *brave) Search(ctx context.Context, q query.Query) ([]Result, error) {
-	count := q.Count
-	if count <= 0 || count > 20 {
-		count = 20
+	want := q.Count
+	if want <= 0 {
+		want = 10
 	}
+
+	var out []Result
+	seen := map[string]bool{}
+	var lastErr error
+	// Brave's offset is the page index (0-9) and each page holds at most 20.
+	for page := 0; page <= 9 && len(out) < want; page++ {
+		size := want - len(out)
+		if size > 20 {
+			size = 20
+		}
+		res, err := b.page(ctx, q, size, page)
+		if err != nil {
+			lastErr = err
+			break
+		}
+		added := 0
+		for _, r := range res {
+			if seen[r.URL] {
+				continue
+			}
+			seen[r.URL] = true
+			out = append(out, r)
+			added++
+		}
+		if added == 0 {
+			break
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	if len(out) == 0 && lastErr != nil {
+		return nil, lastErr
+	}
+	for i := range out {
+		out[i].Rank = i + 1
+	}
+	return out, nil
+}
+
+func (b *brave) page(ctx context.Context, q query.Query, count, offset int) ([]Result, error) {
 	params := url.Values{}
 	params.Set("q", q.EngineString())
 	params.Set("count", strconv.Itoa(count))
+	if offset > 0 {
+		params.Set("offset", strconv.Itoa(offset))
+	}
 	if len(q.Langs) > 0 {
 		params.Set("search_lang", strings.Split(q.Langs[0], "-")[0])
 	}

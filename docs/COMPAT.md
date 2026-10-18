@@ -75,7 +75,7 @@
 | `site_icon` | 🧪 | 恒为 `https://cdn.deepseek.com/site-icons/<可注册域>` ⚠️ 我们输出自有模板（默认 `<host>/favicon.ico`），可用 `site_icon_template` 改成官方 CDN |
 | `snippet` 长度 | 🧪 | 80–364 字符，均值 126–178（随查询变化）；本实现 clip 到 360 内 |
 | `summary` 长度 | 🧪 | 无 need_content：144–2504（均值 1130–1364）；有 need_content：2654–4386（均值 3328）⚠️ 本实现合成摘要，content 可得时目标 800–1600，仅 snippet 时 ≤1200 |
-| `content` 填充策略 | 🧪 | 官方**抓全部结果**（8/8、15/15、30/30 均填满）⚠️ 本实现受 `need_content_max_results` 限制（默认 20），失败项为 `""` |
+| `content` 填充策略 | 🧪 | 官方**抓全部结果**（8/8、15/15、30/30 均填满）；本实现同样默认抓全部（上限 50，并发 16），只有被反爬拦截/超时的条目为 `""`（实测 9/10，唯一失败项是知乎，官方抓它同样 404） |
 | 乱码查询不给空 | 🧪 | 乱码串仍返回 10 条低分结果 ⚠️ 我们可能因离题过滤返回更少或空 |
 
 ## 5. Fetch
@@ -152,7 +152,7 @@
 | 2 | `after:` / `before:` 为结果后置过滤 | 无索引级时间过滤 |
 | 3 | `localization` 不生效 | 无 GeoIP |
 | 4 | `ori_question` 不参与排序 | v1 无 LLM 富化 |
-| 5 | `need_content` 只抓前 N 条（默认 20） | 抓满 50 页在自托管下过慢；官方抓全部 |
+| 5 | `count>10` 且只启用 Bing 时最多 10 条 | Bing RSS/HTML 每页固定 10 条且不认翻页参数；SearXNG 与 Brave 已实现分页（pageno/offset），默认部署（含 SearXNG）可拿满 count |
 | 6 | `count: null` 等类型边界更宽松 | 正常客户端不受影响 |
 | 7 | 乱码查询可能返回空数组 | 有离题结果过滤；官方返回 10 条低分结果 |
 | 8 | `site_icon` 用自有模板 | 不依赖官方 CDN；可配置成 `https://cdn.deepseek.com/site-icons/{host}` |

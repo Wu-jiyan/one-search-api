@@ -42,12 +42,11 @@ search:
   overall_timeout: 12s        # 上游扇出总预算
   provider_timeout: 2500ms    # 单个 provider 预算（Bing 渠道建议在 providers 里单独放宽）
   max_concurrency: 32         # 全局并发请求闸门
-  # need_content 行为：官方对 need_content=true 会抓全部结果；本服务默认抓前 20 条
-  # （count 上限 50，抓满 50 页在自托管场景下过慢，20 条是速度/完整性折中）。
-  # 失败或超出上限的结果 content 保持空串。
-  need_content_max_results: 20
-  content_fetch_timeout: 6s
-  content_fetch_concurrency: 8
+  # need_content 行为：与官方一致，默认对全部结果（最多 50 条）抓正文。
+  # 被反爬拦截或超时的结果 content 保持空串，不影响其它结果。
+  need_content_max_results: 50
+  content_fetch_timeout: 10s
+  content_fetch_concurrency: 16
   per_domain_limit: 3
   cache_ttl: 5m
   site_icon_template: "https://{host}/favicon.ico"

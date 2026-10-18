@@ -21,8 +21,10 @@ import (
 	"github.com/wujiyan/one-search-api/internal/obs"
 )
 
-// maxContentRunes bounds the Markdown returned to clients.
-const maxContentRunes = 200_000
+// maxContentRunes bounds the Markdown returned to clients. The reference API
+// returned a 447k-rune RFC document intact, so this cap sits comfortably above
+// it while still bounding pathological pages.
+const maxContentRunes = 500_000
 
 // Service fetches and extracts single web pages.
 type Service struct {

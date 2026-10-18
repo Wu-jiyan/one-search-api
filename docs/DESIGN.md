@@ -189,8 +189,8 @@ Bing 两个渠道额外共享一套 `bingSession`（§4.1）：首页预热 cook
 
 | type | 端点 | 鉴权 | 产出 | 备注 |
 |---|---|---|---|---|
-| `searxng` | `GET {base}/search?format=json` | 可选 `X-Token` | title/url/content/publishedDate/score/favicon | 需在 SearXNG settings.yml 开启 `json` 格式 |
-| `bingrss` | `GET {base}/search?…&format=rss` | 无 | title/link/description/pubDate | 约 5KB，date 最全；空 channel 重试 + HTML 回退；默认渠道 |
+| `searxng` | `GET {base}/search?format=json` | 可选 `X-Token` | title/url/content/publishedDate/score/favicon | 需在 SearXNG settings.yml 开启 `json` 格式；按 `pageno` 翻页（最多 5 页） |
+| `bingrss` | `GET {base}/search?…&format=rss` | 无 | title/link/description/pubDate | 约 5KB，date 最全；空 channel 重试 + HTML 回退；默认渠道；RSS 每页固定 10 条且不认翻页 |
 | `binghtml` | `GET {base}/search?…` | 无 | `li.b_algo` 的 title/url/caption/news_dt | 约 100KB，摘要结构更全；被挑战时轮换指纹重试 |
 | `duckduckgo` | `POST {base}/html/` | 无 | title/url/snippet | 解析 `result__a` / `result__snippet`；易触发验证码，默认权重低 |
 | `brave` | `GET https://api.search.brave.com/res/v1/web/search` | `X-Subscription-Token` | title/url/description/age/page_age | 免费 2000 次/月，需自备 key |
@@ -251,7 +251,7 @@ Bing 两个渠道额外共享一套 `bingSession`（§4.1）：首页预热 cook
 | `url` | 引擎 | 归一化后的绝对 URL |
 | `snippet` | 引擎 content/description | 去标签、反转义、合并空白，截 360 字符（官方实测 80–364） |
 | `summary` | `content` 或组内 snippets | 有正文：取正文前 1600 字符内最后一句边界（目标 800～1600）；无正文：拼接组内 snippet 至约 1200 字符；再退化为 snippet（官方实测 144–4386） |
-| `content` | 抓取 | `need_content=false` 恒 `""`；true 时按 `need_content_max_results`（默认 20）抓取，失败为空串 |
+| `content` | 抓取 | `need_content=false` 恒 `""`；true 时抓取全部结果（`need_content_max_results` 默认 50），失败为空串 |
 | `site_name` | 域名映射表 → 页面 `og:site_name` → 注册域 | 内置约 120 条常见站点映射，未知回退注册域（如 `example.com`） |
 | `site_icon` | 模板 | 默认 `https://{host}/favicon.ico`，可配置模板 |
 | `date` | RSS pubDate / SearXNG publishedDate / Tavily published_date / 页面 meta | 多格式解析后统一 UTC RFC3339；失败为 `null` |
@@ -300,8 +300,10 @@ score  = clamp(3*(raw+boost), 0, 3)
    - `fetch.allow_private=true` 可关闭（仅本地调试），默认 false。
 3. **读取限制**：超时 10s、响应体 ≤5MB、媒体类型白名单与官方实测一致
    （HTML / 纯文本 / Markdown / CSS / JS / JSON 可抓；XML / CSV / PDF / 图片 404）。
-4. **抽取**：charset 嗅探 → readability 找正文 → HTML 转 Markdown；标题取 readability/`<title>`。
-   HTML 正文少于 `fetch.min_content_runes`（默认 120）判为无正文；纯文本文档不做该下限。
+4. **抽取**：charset 嗅探 → readability 找正文 → HTML 转 Markdown；标题依次取
+   readability / `<title>` / 首个 `<h1>`。readability 明显欠抽取（<60% 且页面 `<p>` 更全）时
+   用 `<p>` 全文补全，短页面因此不会只剩一两句。HTML 正文少于 `fetch.min_content_runes`
+   （默认 120）判为无正文；纯文本文档不做该下限。返回正文上限 500k 字符（官方实测单页可达 447k）。
 5. **缓存**：按归一化 URL 缓存成功结果，TTL 30min，singleflight 合并并发请求。
 6. 失败映射（对齐官方实测）：URL 校验失败 → 400；其余一切失败（SSRF、上游错误、无正文、
    媒体类型不支持）→ 404 `failed to fetch URL`；超时 → 504；页面过大 → 413。
