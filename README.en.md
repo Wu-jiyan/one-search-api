@@ -4,6 +4,8 @@
 > One `base_url` for your agent, many free search backends behind it.
 
 [![CI](https://github.com/Wu-jiyan/one-search-api/actions/workflows/ci.yml/badge.svg)](https://github.com/Wu-jiyan/one-search-api/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Wu-jiyan/one-search-api.svg)](https://github.com/Wu-jiyan/one-search-api/releases)
+[![Go Reference](https://pkg.go.dev/badge/github.com/Wu-jiyan/one-search-api.svg)](https://pkg.go.dev/github.com/Wu-jiyan/one-search-api)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/go-1.27-00ADD8.svg)](go.mod)
 [![Contract](https://img.shields.io/badge/contract-measured%20vs%20official-brightgreen.svg)](docs/COMPAT.md)
@@ -62,6 +64,7 @@ real value here is **independence and control**, not saving money.
   the archive includes `config.example.yaml`.
 - **Docker**: `docker build -t one-search-api . && docker run -p 8080:8080 one-search-api`
   (see the compose setup below for SearXNG).
+- **go install**: `go install github.com/Wu-jiyan/one-search-api/cmd/onesearch@latest`
 
 The default config enables **Bing RSS** only, which works out of the box:
 

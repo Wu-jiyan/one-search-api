@@ -4,6 +4,8 @@
 > One `base_url` for your agent, many free search backends behind it.
 
 [![CI](https://github.com/Wu-jiyan/one-search-api/actions/workflows/ci.yml/badge.svg)](https://github.com/Wu-jiyan/one-search-api/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Wu-jiyan/one-search-api.svg)](https://github.com/Wu-jiyan/one-search-api/releases)
+[![Go Reference](https://pkg.go.dev/badge/github.com/Wu-jiyan/one-search-api.svg)](https://pkg.go.dev/github.com/Wu-jiyan/one-search-api)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/go-1.27-00ADD8.svg)](go.mod)
 [![Contract](https://img.shields.io/badge/contract-measured%20vs%20official-brightgreen.svg)](docs/COMPAT.md)
@@ -61,6 +63,7 @@ POST /v1/tools/fetch    → {"title":"...","content":"# Markdown 正文"}
   压缩包里附 `config.example.yaml`。
 - **Docker**：`docker build -t one-search-api . && docker run -p 8080:8080 one-search-api`
   （含 SearXNG 的完整部署见下方 compose）。
+- **go install**：`go install github.com/Wu-jiyan/one-search-api/cmd/onesearch@latest`
 
 默认配置只启用 **Bing RSS**，开箱即可用：
 
