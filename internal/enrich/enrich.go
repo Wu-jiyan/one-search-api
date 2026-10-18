@@ -53,21 +53,23 @@ func Title(s string) string {
 	return Clip(s, 300)
 }
 
-// Snippet returns a 100-200 rune summary suitable for display.
+// Snippet returns a ~100-360 rune excerpt suitable for display. The bounds come
+// from measuring the reference API (observed 80-364 runes, mean ~140).
 func Snippet(raw string) string {
 	text := strings.Join(strings.Fields(reTag.ReplaceAllString(html.UnescapeString(raw), " ")), " ")
 	if text == "" {
 		return ""
 	}
-	return clipAtSentence(text, 200, 60)
+	return clipAtSentence(text, 360, 100)
 }
 
 // Summary builds the long summary: from page content when available, else from
-// the snippets gathered for the same result.
+// the snippets gathered for the same result. The reference API returns roughly
+// 150-2600 runes without need_content (mean ~1300) and up to ~4400 with it.
 func Summary(contentMarkdown string, snippets []string) string {
 	text := MarkdownToText(contentMarkdown)
 	if utf8.RuneCountInString(text) >= 120 {
-		return clipAtSentence(text, 800, 400)
+		return clipAtSentence(text, 1600, 800)
 	}
 
 	var parts []string
@@ -83,7 +85,7 @@ func Summary(contentMarkdown string, snippets []string) string {
 		}
 		seen[s] = true
 		parts = append(parts, s)
-		if utf8.RuneCountInString(strings.Join(parts, " ")) >= 800 {
+		if utf8.RuneCountInString(strings.Join(parts, " ")) >= 1200 {
 			break
 		}
 	}
@@ -91,7 +93,7 @@ func Summary(contentMarkdown string, snippets []string) string {
 	if joined == "" {
 		return ""
 	}
-	return clipAtSentence(joined, 800, 200)
+	return clipAtSentence(joined, 1200, 400)
 }
 
 // Clip truncates s to at most max runes, appending an ellipsis when cut.

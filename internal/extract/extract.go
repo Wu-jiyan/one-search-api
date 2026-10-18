@@ -87,12 +87,20 @@ func decode(body []byte, contentType string) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(r, 8<<20))
 }
 
+// isPlainText reports whether the media type should be returned verbatim
+// instead of being parsed as HTML. It covers the text-like types the fetch
+// service accepts (HTML itself goes through the readability path).
 func isPlainText(contentType string) bool {
-	ct := strings.ToLower(contentType)
-	if ct == "" {
-		return false
+	ct := strings.ToLower(strings.TrimSpace(contentType))
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = strings.TrimSpace(ct[:i])
 	}
-	return strings.HasPrefix(ct, "text/plain") || strings.Contains(ct, "application/json")
+	switch ct {
+	case "text/plain", "text/markdown", "text/css", "text/javascript",
+		"application/json", "application/javascript", "text/richtext":
+		return true
+	}
+	return false
 }
 
 func toMarkdown(htmlFragment string) string {

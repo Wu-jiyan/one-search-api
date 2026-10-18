@@ -20,17 +20,56 @@ type SearchRequest struct {
 
 // SearchResult is one entry of the results array. Every field is always
 // serialized; nullable fields are pointers so they render as JSON null.
+// The field order matches the reference API's wire output.
 type SearchResult struct {
-	RerankScore float64    `json:"rerank_score"`
-	Title       string     `json:"title"`
-	URL         string     `json:"url"`
-	Snippet     string     `json:"snippet"`
-	Summary     string     `json:"summary"`
-	Content     string     `json:"content"`
-	SiteName    *string    `json:"site_name"`
-	SiteIcon    *string    `json:"site_icon"`
-	Date        *time.Time `json:"date"`
-	Authority   int        `json:"authority"`
+	Title       string  `json:"title"`
+	SiteName    *string `json:"site_name"`
+	SiteIcon    *string `json:"site_icon"`
+	Authority   int     `json:"authority"`
+	RerankScore float64 `json:"rerank_score"`
+	Date        *Date   `json:"date"`
+	URL         string  `json:"url"`
+	Summary     string  `json:"summary"`
+	Snippet     string  `json:"snippet"`
+	Content     string  `json:"content"`
+}
+
+// Date is a nullable timestamp rendered exactly like the official API:
+// UTC RFC3339 with an explicit +00:00 offset (not "Z").
+type Date time.Time
+
+// NewDate converts a time to the wire date type; the zero time becomes nil.
+func NewDate(t time.Time) *Date {
+	if t.IsZero() {
+		return nil
+	}
+	d := Date(t.UTC().Round(0))
+	return &d
+}
+
+// Time returns the underlying time value.
+func (d Date) Time() time.Time { return time.Time(d) }
+
+// MarshalJSON implements json.Marshaler.
+func (d Date) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + time.Time(d).UTC().Format("2006-01-02T15:04:05+00:00") + `"`), nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (d *Date) UnmarshalJSON(b []byte) error {
+	if string(b) == "null" {
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return err
+	}
+	*d = Date(t.UTC())
+	return nil
 }
 
 // SearchResponse is the 200 body for /v1/tools/search.
@@ -51,10 +90,11 @@ type FetchRequest struct {
 	URL string `json:"url"`
 }
 
-// FetchResponse is the 200 body for /v1/tools/fetch.
+// FetchResponse is the 200 body for /v1/tools/fetch. The field order matches
+// the reference API's wire output.
 type FetchResponse struct {
-	Title   string `json:"title"`
 	Content string `json:"content"`
+	Title   string `json:"title"`
 }
 
 // ErrorBody is the OpenAI-compatible error envelope.
@@ -77,7 +117,8 @@ const (
 	TypeInsufficientQuota = "insufficient_quota"
 	TypePermission        = "permission_error"
 	TypeNotFound          = "not_found_error"
-	TypeTimeout           = "timeout_error"
+	TypeGatewayTimeout    = "gateway_timeout_error"
+	TypePayloadTooLarge   = "payload_too_large_error"
 	TypeRateLimit         = "rate_limit_error"
 	TypeServer            = "server_error"
 )
@@ -103,9 +144,12 @@ func InvalidRequest(msg string) *APIError {
 	return NewAPIError(http.StatusBadRequest, TypeInvalidRequest, msg)
 }
 
-// NotFound builds a 404 error.
+// NotFound builds a 404 error. The reference API reports 404 with
+// type=not_found_error but code=invalid_request_error; we match that.
 func NotFound(msg string) *APIError {
-	return NewAPIError(http.StatusNotFound, TypeNotFound, msg)
+	e := NewAPIError(http.StatusNotFound, TypeNotFound, msg)
+	e.Code = TypeInvalidRequest
+	return e
 }
 
 // Forbidden builds a 403 error.
@@ -113,10 +157,11 @@ func Forbidden(msg string) *APIError {
 	return NewAPIError(http.StatusForbidden, TypePermission, msg)
 }
 
-// Unauthorized builds a 401 error.
+// Unauthorized builds a 401 error. The official API reports 401 with
+// type=authentication_error but code=invalid_request_error; we match that.
 func Unauthorized(msg string) *APIError {
 	e := NewAPIError(http.StatusUnauthorized, TypeAuthentication, msg)
-	e.Code = "invalid_api_key"
+	e.Code = TypeInvalidRequest
 	return e
 }
 
@@ -135,10 +180,17 @@ func QuotaExceeded(msg string) *APIError {
 	return e
 }
 
-// UpstreamTimeout builds a 504 error.
+// UpstreamTimeout builds a 504 error. The reference API uses
+// type=code=gateway_timeout_error.
 func UpstreamTimeout(msg string) *APIError {
-	e := NewAPIError(http.StatusGatewayTimeout, TypeTimeout, msg)
-	e.Code = "upstream_timeout"
+	return NewAPIError(http.StatusGatewayTimeout, TypeGatewayTimeout, msg)
+}
+
+// PayloadTooLarge builds a 413 error. The reference API uses
+// type=payload_too_large_error with code=invalid_request_error.
+func PayloadTooLarge(msg string) *APIError {
+	e := NewAPIError(http.StatusRequestEntityTooLarge, TypePayloadTooLarge, msg)
+	e.Code = TypeInvalidRequest
 	return e
 }
 
@@ -153,7 +205,7 @@ func AsAPIError(err error) *APIError {
 
 // WriteJSON writes v as JSON with the given status.
 func WriteJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)

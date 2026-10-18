@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -309,6 +308,7 @@ func TestSearchValidation(t *testing.T) {
 		{"count zero", map[string]any{"query": "x", "count": 0}, http.StatusBadRequest},
 		{"count too big", map[string]any{"query": "x", "count": 51}, http.StatusBadRequest},
 		{"ori_question too long", map[string]any{"query": "x", "ori_question": strings.Repeat("q", 200)}, http.StatusBadRequest},
+		{"ori_question empty", map[string]any{"query": "x", "ori_question": ""}, http.StatusBadRequest},
 		{"invalid json", "{not json", http.StatusBadRequest},
 	}
 	for _, tc := range cases {
@@ -342,17 +342,47 @@ func TestPayloadTooLarge(t *testing.T) {
 		t.Fatalf("status = %d, want 413, body = %s", status, body)
 	}
 	eb := decodeError(t, body)
-	if eb.Error.Code != "payload_too_large" {
-		t.Errorf("code = %q", eb.Error.Code)
+	// The reference API uses type=payload_too_large_error and
+	// code=invalid_request_error for oversized bodies.
+	if eb.Error.Code != httpx.TypeInvalidRequest || eb.Error.Type != httpx.TypePayloadTooLarge {
+		t.Errorf("error = %+v", eb.Error)
 	}
 }
 
-func TestDecodeErrorMapping(t *testing.T) {
-	if e := decodeBodyError(errors.New("bad json")); e.Status != http.StatusBadRequest {
-		t.Errorf("generic decode error -> %d", e.Status)
+func TestRequestFraming(t *testing.T) {
+	env := newEnv(t, nil)
+
+	// Non-JSON Content-Type is rejected before the body is parsed.
+	req, err := http.NewRequest(http.MethodPost, env.srv.URL+"/v1/tools/search",
+		strings.NewReader(`{"query":"x"}`))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
 	}
-	if e := decodeBodyError(context.DeadlineExceeded); e.Status != http.StatusRequestTimeout || e.Code != "request_timeout" {
-		t.Errorf("timeout decode error -> %+v", e)
+	req.Header.Set("Content-Type", "text/plain")
+	req.Header.Set("Authorization", "Bearer test-key")
+	resp, err := env.client.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer resp.Body.Close()
+	framingBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("text/plain content type -> %d, want 400", resp.StatusCode)
+	}
+	if eb := decodeError(t, framingBody); !strings.Contains(eb.Error.Message, "Content-Type must be application/json") {
+		t.Errorf("message = %q", eb.Error.Message)
+	}
+
+	// Empty and non-object bodies are rejected as such.
+	for _, body := range []string{"", "[]", "null"} {
+		status, _, out := env.call(http.MethodPost, "/v1/tools/search", "test-key", body)
+		if status != http.StatusBadRequest {
+			t.Errorf("body %q -> %d, want 400 (%s)", body, status, out)
+		}
+		eb := decodeError(t, out)
+		if !strings.Contains(eb.Error.Message, "must be a JSON object") {
+			t.Errorf("body %q message = %q", body, eb.Error.Message)
+		}
 	}
 }
 
@@ -364,7 +394,7 @@ func TestAuthRequired(t *testing.T) {
 		t.Fatalf("status = %d, want 401", status)
 	}
 	eb := decodeError(t, body)
-	if eb.Error.Type != httpx.TypeAuthentication || eb.Error.Code != "invalid_api_key" {
+	if eb.Error.Type != httpx.TypeAuthentication || eb.Error.Code != httpx.TypeInvalidRequest {
 		t.Errorf("error = %+v", eb.Error)
 	}
 	if eb.Error.Param != nil {
@@ -433,12 +463,13 @@ func TestFetchHappyPath(t *testing.T) {
 
 func TestFetchSSRFBlocked(t *testing.T) {
 	env := newEnv(t, func(c *config.Config) { c.Fetch.AllowPrivate = false })
+	// The reference API hides its SSRF policy behind an opaque 404.
 	status, _, body := env.call(http.MethodPost, "/v1/tools/fetch", "test-key", map[string]any{"url": env.page.URL})
-	if status != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403, body = %s", status, body)
+	if status != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404, body = %s", status, body)
 	}
 	eb := decodeError(t, body)
-	if eb.Error.Type != httpx.TypePermission {
+	if eb.Error.Type != httpx.TypeNotFound {
 		t.Errorf("error type = %q", eb.Error.Type)
 	}
 }

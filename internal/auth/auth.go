@@ -125,10 +125,10 @@ func (a *Authenticator) Authenticate(token, clientIP string) (*Key, *httpx.APIEr
 		return a.anonymous(clientIP), nil
 	}
 	if token == "" {
-		return nil, httpx.Unauthorized("missing Authorization: Bearer <api key>")
+		return nil, httpx.Unauthorized("Authentication Fails (missing key)")
 	}
 	if len(a.keys) == 0 {
-		return nil, httpx.Unauthorized("no api keys configured")
+		return nil, httpx.Unauthorized("Authentication Fails (no api keys configured)")
 	}
 	hashed := config.HashToken(token)
 	for _, k := range a.keys {
@@ -136,7 +136,12 @@ func (a *Authenticator) Authenticate(token, clientIP string) (*Key, *httpx.APIEr
 			return k, nil
 		}
 	}
-	return nil, httpx.Unauthorized("invalid api key")
+	// Match the reference API's wording: only the tail of the key is echoed.
+	tail := token
+	if len(tail) > 4 {
+		tail = tail[len(tail)-4:]
+	}
+	return nil, httpx.Unauthorized("Authentication Fails, Your api key: ****" + tail + " is invalid")
 }
 
 // anonymous returns a client-specific synthetic key.

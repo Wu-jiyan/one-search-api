@@ -191,9 +191,9 @@ func Default() *Config {
 			OverallTimeout:          Duration(12 * time.Second),
 			ProviderTimeout:         Duration(2500 * time.Millisecond),
 			MaxConcurrency:          32,
-			NeedContentMaxResults:   10,
-			ContentFetchTimeout:     Duration(8 * time.Second),
-			ContentFetchConcurrency: 6,
+			NeedContentMaxResults:   20,
+			ContentFetchTimeout:     Duration(6 * time.Second),
+			ContentFetchConcurrency: 8,
 			PerDomainLimit:          3,
 			CacheTTL:                Duration(5 * time.Minute),
 			SiteIconTemplate:        "https://{host}/favicon.ico",
@@ -202,7 +202,7 @@ func Default() *Config {
 		Fetch: FetchConfig{
 			Timeout:         Duration(10 * time.Second),
 			MaxBytes:        5 << 20, // 5 MiB
-			MaxRedirects:    5,
+			MaxRedirects:    15,
 			AllowPorts:      []int{80, 443, 8080, 8443},
 			UserAgent:       "Mozilla/5.0 (compatible; OneSearchAPI/1.0; +https://github.com/wujiyan/one-search-api)",
 			CacheTTL:        Duration(30 * time.Minute),
@@ -366,13 +366,13 @@ func (c *Config) Normalize() error {
 		c.Search.MaxConcurrency = 32
 	}
 	if c.Search.NeedContentMaxResults <= 0 {
-		c.Search.NeedContentMaxResults = 10
+		c.Search.NeedContentMaxResults = 20
 	}
 	if c.Search.ContentFetchTimeout.D() <= 0 {
-		c.Search.ContentFetchTimeout = Duration(8 * time.Second)
+		c.Search.ContentFetchTimeout = Duration(6 * time.Second)
 	}
 	if c.Search.ContentFetchConcurrency <= 0 {
-		c.Search.ContentFetchConcurrency = 6
+		c.Search.ContentFetchConcurrency = 8
 	}
 	if c.Search.PerDomainLimit <= 0 {
 		c.Search.PerDomainLimit = 3
@@ -393,7 +393,7 @@ func (c *Config) Normalize() error {
 		c.Fetch.MaxBytes = 5 << 20
 	}
 	if c.Fetch.MaxRedirects <= 0 {
-		c.Fetch.MaxRedirects = 5
+		c.Fetch.MaxRedirects = 15
 	}
 	if len(c.Fetch.AllowPorts) == 0 {
 		c.Fetch.AllowPorts = []int{80, 443, 8080, 8443}

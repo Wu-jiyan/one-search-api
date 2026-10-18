@@ -55,6 +55,7 @@ func (s *Service) ValidateURL(raw string) (*url.URL, error) {
 }
 
 // MapError converts a fetchguard error into the public API error contract.
+// Messages mirror the reference API's validation wording.
 func MapError(err error) *httpx.APIError {
 	if err == nil {
 		return nil
@@ -64,12 +65,20 @@ func MapError(err error) *httpx.APIError {
 		return apiErr
 	}
 	switch {
+	case errors.Is(err, fetchguard.ErrCredentials):
+		return httpx.InvalidRequest("'url' must not contain credentials")
+	case errors.Is(err, fetchguard.ErrURLTooLong):
+		return httpx.InvalidRequest("'url' must be at most 8192 characters")
+	case errors.Is(err, fetchguard.ErrBadScheme), errors.Is(err, fetchguard.ErrNoHost):
+		return httpx.InvalidRequest("'url' must be an HTTP or HTTPS URL with a host")
 	case errors.Is(err, fetchguard.ErrBlocked):
-		return httpx.Forbidden("url is not allowed: " + err.Error())
+		// The reference API reports private/blocked targets as an opaque 404
+		// rather than exposing its policy; match that so clients behave the same.
+		return httpx.NotFound("failed to fetch URL")
 	case errors.Is(err, fetchguard.ErrInvalid):
-		return httpx.InvalidRequest(err.Error())
+		return httpx.InvalidRequest("'url' must be a valid HTTP or HTTPS URL")
 	default:
-		return httpx.InvalidRequest(err.Error())
+		return httpx.InvalidRequest("'url' must be a valid HTTP or HTTPS URL")
 	}
 }
 
@@ -135,83 +144,108 @@ func (s *Service) fetchOnce(ctx context.Context, u *url.URL) (*extract.Page, err
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		s.metrics.Inc("onesearch_fetch_total", "status", "upstream_error")
-		return nil, httpx.NotFound("unable to fetch url: upstream returned status " + itoa(resp.StatusCode))
+		return nil, httpx.NotFound("failed to fetch URL")
 	}
 	ct := resp.Header.Get("Content-Type")
 	if !allowedContentType(ct) {
 		s.metrics.Inc("onesearch_fetch_total", "status", "unsupported_type")
-		return nil, httpx.NotFound("unable to fetch url: unsupported content type " + ct)
+		return nil, httpx.NotFound("failed to fetch URL")
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, s.cfg.MaxBytes+1))
 	if err != nil {
 		if isTimeout(err) {
-			return nil, httpx.UpstreamTimeout("timed out while reading the page")
+			return nil, httpx.UpstreamTimeout("Request timeout")
 		}
-		return nil, httpx.NotFound("unable to read page body")
+		return nil, httpx.NotFound("failed to fetch URL")
 	}
 	if int64(len(body)) > s.cfg.MaxBytes {
 		s.metrics.Inc("onesearch_fetch_total", "status", "too_large")
-		e := httpx.InvalidRequest("page exceeds the maximum allowed size")
-		e.Status = http.StatusRequestEntityTooLarge
-		e.Code = "payload_too_large"
-		return nil, e
+		return nil, httpx.PayloadTooLarge("page exceeds the maximum allowed size")
 	}
 
 	page, err := extract.Extract(u.String(), body, ct)
 	if err != nil {
 		s.metrics.Inc("onesearch_fetch_total", "status", "no_content")
-		return nil, httpx.NotFound("unable to extract page content")
+		return nil, httpx.NotFound("failed to fetch URL")
 	}
-	if utf8.RuneCountInString(page.Text) < s.cfg.MinContentRunes {
+	// The reference API only enforces a minimum body length for HTML pages;
+	// short plain-text resources (robots.txt, RFCs, source files) still succeed.
+	if isHTMLType(ct) && utf8.RuneCountInString(page.Text) < s.cfg.MinContentRunes {
 		s.metrics.Inc("onesearch_fetch_total", "status", "no_content")
-		return nil, httpx.NotFound("unable to extract page content")
+		return nil, httpx.NotFound("failed to fetch URL")
+	}
+	if strings.TrimSpace(page.Text) == "" {
+		s.metrics.Inc("onesearch_fetch_total", "status", "no_content")
+		return nil, httpx.NotFound("failed to fetch URL")
 	}
 	s.metrics.Inc("onesearch_fetch_total", "status", "ok")
 	return &page, nil
 }
 
-func allowedContentType(ct string) bool {
+// baseContentType lowercases the media type and drops any parameters.
+func baseContentType(ct string) string {
 	ct = strings.ToLower(strings.TrimSpace(ct))
-	if ct == "" {
-		return true
-	}
 	if i := strings.IndexByte(ct, ';'); i >= 0 {
 		ct = strings.TrimSpace(ct[:i])
 	}
-	switch ct {
-	case "text/html", "application/xhtml+xml", "text/plain", "application/xml", "text/xml":
+	return ct
+}
+
+// allowedContentType mirrors the reference API's measured media-type policy:
+// text-like documents and JSON pass through, while XML, CSV, PDF and binary
+// payloads are reported as 404. Accepting a few extra text types is harmless.
+func allowedContentType(ct string) bool {
+	mt := baseContentType(ct)
+	if mt == "" {
+		return true // no header: let the extractor sniff
+	}
+	switch mt {
+	case "text/html", "application/xhtml+xml", "text/xhtml",
+		"text/plain", "text/markdown", "text/css", "text/javascript",
+		"application/json", "application/javascript", "text/richtext":
 		return true
+	}
+	if strings.HasPrefix(mt, "text/") {
+		// text/xml and text/csv are the two text types the reference API rejects.
+		return mt != "text/xml" && mt != "text/csv"
 	}
 	return false
 }
 
+func isHTMLType(ct string) bool {
+	mt := baseContentType(ct)
+	return mt == "" || mt == "text/html" || mt == "application/xhtml+xml" || mt == "text/xhtml"
+}
+
 func mapGuardError(err error) error {
-	switch {
-	case errors.Is(err, fetchguard.ErrBlocked):
-		return httpx.Forbidden("url is not allowed: " + err.Error())
-	case errors.Is(err, fetchguard.ErrInvalid):
-		return httpx.InvalidRequest(err.Error())
-	default:
-		return httpx.InvalidRequest(err.Error())
+	if apiErr := MapError(err); apiErr != nil {
+		return apiErr
 	}
+	return httpx.InvalidRequest("'url' must be a valid HTTP or HTTPS URL")
 }
 
 func mapNetError(err error) error {
-	if errors.Is(err, fetchguard.ErrBlocked) {
-		return httpx.Forbidden("url is blocked by security policy")
-	}
 	if errors.Is(err, fetchguard.ErrInvalid) {
-		return httpx.InvalidRequest(err.Error())
+		if apiErr := MapError(err); apiErr != nil {
+			return apiErr
+		}
+		return httpx.InvalidRequest("'url' must be a valid HTTP or HTTPS URL")
 	}
 	if errors.Is(err, context.DeadlineExceeded) || isTimeout(err) {
-		return httpx.UpstreamTimeout("fetch timed out")
+		return httpx.UpstreamTimeout("Request timeout")
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
-		return httpx.UpstreamTimeout("fetch timed out")
+		return httpx.UpstreamTimeout("Request timeout")
 	}
-	return httpx.NotFound("unable to fetch url: " + err.Error())
+	// Blocked destinations, DNS failures and refused connections are all opaque
+	// 404s in the reference API.
+	var apiErr *httpx.APIError
+	if errors.As(err, &apiErr) {
+		return apiErr
+	}
+	return httpx.NotFound("failed to fetch URL")
 }
 
 func isTimeout(err error) bool {

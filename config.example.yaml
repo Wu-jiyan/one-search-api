@@ -42,9 +42,12 @@ search:
   overall_timeout: 12s        # 上游扇出总预算
   provider_timeout: 2500ms    # 单个 provider 预算（Bing 渠道建议在 providers 里单独放宽）
   max_concurrency: 32         # 全局并发请求闸门
-  need_content_max_results: 10
-  content_fetch_timeout: 8s
-  content_fetch_concurrency: 6
+  # need_content 行为：官方对 need_content=true 会抓全部结果；本服务默认抓前 20 条
+  # （count 上限 50，抓满 50 页在自托管场景下过慢，20 条是速度/完整性折中）。
+  # 失败或超出上限的结果 content 保持空串。
+  need_content_max_results: 20
+  content_fetch_timeout: 6s
+  content_fetch_concurrency: 8
   per_domain_limit: 3
   cache_ttl: 5m
   site_icon_template: "https://{host}/favicon.ico"
@@ -54,7 +57,7 @@ search:
 fetch:
   timeout: 10s
   max_bytes: 5242880          # 5 MiB
-  max_redirects: 5
+  max_redirects: 15         # 实测官方跟随 12 次跳转仍成功
   allow_private: false        # 生产环境务必保持 false（SSRF 防护）
   allow_ports: [80, 443, 8080, 8443]
   user_agent: "Mozilla/5.0 (compatible; OneSearchAPI/1.0)"

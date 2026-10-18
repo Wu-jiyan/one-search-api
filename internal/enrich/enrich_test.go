@@ -16,8 +16,8 @@ func TestSnippetCleansAndClips(t *testing.T) {
 
 	long := strings.Repeat("这是一个很长的句子。", 60)
 	clipped := Snippet(long)
-	if n := utf8.RuneCountInString(clipped); n > 200 {
-		t.Errorf("snippet length = %d, want <= 200", n)
+	if n := utf8.RuneCountInString(clipped); n > 360 {
+		t.Errorf("snippet length = %d, want <= 360", n)
 	}
 	if !strings.HasSuffix(clipped, "。") && !strings.HasSuffix(clipped, "…") {
 		t.Errorf("snippet should end at a boundary, got %q", clipped)
@@ -28,8 +28,8 @@ func TestSummaryFromContent(t *testing.T) {
 	content := "# 标题\n\n" + strings.Repeat("这是正文中的一句话。", 100)
 	got := Summary(content, nil)
 	n := utf8.RuneCountInString(got)
-	if n < 400 || n > 800 {
-		t.Errorf("summary length = %d, want 400..800", n)
+	if n < 400 || n > 1600 {
+		t.Errorf("summary length = %d, want 400..1600", n)
 	}
 	if strings.Contains(got, "#") {
 		t.Errorf("summary still contains markdown heading marker: %q", got[:10])

@@ -92,8 +92,9 @@ func TestFetchBlocksSSRF(t *testing.T) {
 
 	_, err := svc.Fetch(context.Background(), srv.URL)
 	var apiErr *httpx.APIError
-	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusForbidden {
-		t.Fatalf("err = %v, want 403 APIError", err)
+	// The reference API hides its SSRF policy behind an opaque 404.
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusNotFound {
+		t.Fatalf("err = %v, want 404 APIError", err)
 	}
 }
 
@@ -112,17 +113,56 @@ func TestFetchUpstreamErrorBecomesNotFound(t *testing.T) {
 }
 
 func TestFetchUnsupportedContentType(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/pdf")
-		_, _ = w.Write([]byte("%PDF-1.4"))
-	}))
-	defer srv.Close()
+	// The reference API only converts HTML; any other media type is reported as
+	// 404 (not 415) so clients see the same hole in coverage.
+	rejected := []struct{ contentType, body string }{
+		{"application/pdf", "%PDF-1.4"},
+		{"application/xml", "<doc/>"},
+		{"text/xml", "<doc/>"},
+		{"text/csv", "a,b\n1,2\n"},
+		{"image/png", "\x89PNG"},
+	}
+	for _, tc := range rejected {
+		t.Run("reject/"+tc.contentType, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", tc.contentType)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
 
-	svc := New(testConfig(t, 5*time.Second, srv.URL), obs.NewMetrics())
-	_, err := svc.Fetch(context.Background(), srv.URL)
-	var apiErr *httpx.APIError
-	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusNotFound {
-		t.Fatalf("err = %v, want 404 for unsupported type", err)
+			svc := New(testConfig(t, 5*time.Second, srv.URL), obs.NewMetrics())
+			_, err := svc.Fetch(context.Background(), srv.URL)
+			var apiErr *httpx.APIError
+			if !errors.As(err, &apiErr) || apiErr.Status != http.StatusNotFound {
+				t.Fatalf("err = %v, want 404 for %s", err, tc.contentType)
+			}
+		})
+	}
+
+	// The reference API also extracts text-like documents verbatim.
+	accepted := []struct{ contentType, body string }{
+		{"text/plain", strings.Repeat("plain text body. ", 40)},
+		{"application/json", `{"a":` + strings.Repeat(`"0123456789",`, 30) + `"z":1}`},
+		{"text/css", strings.Repeat("body { color: red; }\n", 40)},
+		{"text/javascript", strings.Repeat("console.log(1);\n", 40)},
+	}
+	for _, tc := range accepted {
+		t.Run("accept/"+tc.contentType, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", tc.contentType)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+
+			svc := New(testConfig(t, 5*time.Second, srv.URL), obs.NewMetrics())
+			got, err := svc.Fetch(context.Background(), srv.URL)
+			if err != nil {
+				t.Fatalf("fetch %s: %v", tc.contentType, err)
+			}
+			if strings.TrimSpace(got.Content) == "" {
+				t.Errorf("%s returned empty content", tc.contentType)
+			}
+		})
 	}
 }
 

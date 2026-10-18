@@ -3,12 +3,15 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
+	"mime"
 	"net"
 	"net/http"
 	"strconv"
@@ -122,8 +125,43 @@ func (s *Server) Handler() http.Handler {
 	var h http.Handler = s.mux
 	h = s.withLogging(h)
 	h = s.withRequestID(h)
+	h = s.withCORS(h)
 	h = s.withRecover(h)
 	return h
+}
+
+// withCORS mirrors the reference API's permissive CORS behavior: echo the
+// request origin, allow credentials, allow POST and the JSON/Authorization
+// headers, and expose the request id. OPTIONS preflight is answered directly.
+func (s *Server) withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			h := w.Header()
+			h.Set("Access-Control-Allow-Origin", origin)
+			h.Set("Access-Control-Allow-Credentials", "true")
+			h.Set("Access-Control-Expose-Headers", "X-Request-Id")
+			h.Add("Vary", "Origin")
+			h.Add("Vary", "Access-Control-Request-Method")
+			h.Add("Vary", "Access-Control-Request-Headers")
+		}
+		if r.Method == http.MethodOptions {
+			h := w.Header()
+			if origin != "" {
+				h.Set("Access-Control-Allow-Methods", "POST")
+				allowed := r.Header.Get("Access-Control-Request-Headers")
+				if allowed == "" {
+					allowed = "authorization,content-type"
+				}
+				h.Set("Access-Control-Allow-Headers", allowed)
+				h.Set("Access-Control-Max-Age", "86400")
+			}
+			h.Set("Allow", "POST")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) withRecover(next http.Handler) http.Handler {
@@ -205,35 +243,41 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	r = r.WithContext(ctx)
 
-	body := http.MaxBytesReader(w, r.Body, s.cfg.Server.MaxBodyBytes)
+	// The reference API authenticates before looking at the body, so a missing
+	// or invalid key wins over any malformed payload.
+	key, apiErr := s.authenticate(r)
+	if apiErr != nil {
+		s.fail(w, r, apiErr)
+		return
+	}
+	body, apiErr := readJSONBody(w, r, s.cfg.Server.MaxBodyBytes)
+	if apiErr != nil {
+		s.fail(w, r, apiErr)
+		return
+	}
 	var req httpx.SearchRequest
-	if err := json.NewDecoder(body).Decode(&req); err != nil {
-		httpx.WriteError(w, decodeBodyError(err))
+	if err := json.Unmarshal(body, &req); err != nil {
+		s.fail(w, r, httpx.InvalidRequest("Invalid JSON request: "+err.Error()))
 		return
 	}
 
 	q, count, needContent, apiErr := s.validateSearch(&req)
 	if apiErr != nil {
-		httpx.WriteError(w, apiErr)
+		s.fail(w, r, apiErr)
 		return
 	}
 
-	key, apiErr := s.authenticate(r)
-	if apiErr != nil {
-		httpx.WriteError(w, apiErr)
-		return
-	}
 	s.noteKey(r, key.Name)
 	if apiErr := key.Admit(); apiErr != nil {
 		s.metrics.Inc("onesearch_rate_limited_total", "reason", apiErr.Type)
-		httpx.WriteError(w, apiErr)
+		s.fail(w, r, apiErr)
 		return
 	}
 	if key.MaxResults > 0 && count > key.MaxResults {
 		count = key.MaxResults
 	}
 
-	if !s.acquire(w) {
+	if !s.acquire(w, r) {
 		return
 	}
 	defer s.release()
@@ -255,14 +299,19 @@ func (s *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	r = r.WithContext(ctx)
 
-	body := http.MaxBytesReader(w, r.Body, s.cfg.Server.MaxBodyBytes)
-	var req httpx.FetchRequest
-	if err := json.NewDecoder(body).Decode(&req); err != nil {
-		httpx.WriteError(w, decodeBodyError(err))
+	key, apiErr := s.authenticate(r)
+	if apiErr != nil {
+		s.fail(w, r, apiErr)
 		return
 	}
-	if strings.TrimSpace(req.URL) == "" {
-		httpx.WriteError(w, httpx.InvalidRequest("'url' is required"))
+	body, apiErr := readJSONBody(w, r, s.cfg.Server.MaxBodyBytes)
+	if apiErr != nil {
+		s.fail(w, r, apiErr)
+		return
+	}
+	var req httpx.FetchRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		s.fail(w, r, httpx.InvalidRequest("Invalid JSON request: "+err.Error()))
 		return
 	}
 	if _, err := s.fetch.ValidateURL(req.URL); err != nil {
@@ -270,19 +319,14 @@ func (s *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key, apiErr := s.authenticate(r)
-	if apiErr != nil {
-		httpx.WriteError(w, apiErr)
-		return
-	}
 	s.noteKey(r, key.Name)
 	if apiErr := key.Admit(); apiErr != nil {
 		s.metrics.Inc("onesearch_rate_limited_total", "reason", apiErr.Type)
-		httpx.WriteError(w, apiErr)
+		s.fail(w, r, apiErr)
 		return
 	}
 
-	if !s.acquire(w) {
+	if !s.acquire(w, r) {
 		return
 	}
 	defer s.release()
@@ -330,32 +374,29 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleNotFound(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/v1/tools/search", "/v1/tools/fetch":
+		// The reference API answers 405 with an empty body and an Allow header.
 		w.Header().Set("Allow", "POST")
-		e := httpx.NewAPIError(http.StatusMethodNotAllowed, httpx.TypeInvalidRequest, "method not allowed")
-		e.Code = "method_not_allowed"
-		httpx.WriteError(w, e)
+		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	case "/healthz", "/metrics", "/":
 		w.Header().Set("Allow", "GET")
-		e := httpx.NewAPIError(http.StatusMethodNotAllowed, httpx.TypeInvalidRequest, "method not allowed")
-		e.Code = "method_not_allowed"
-		httpx.WriteError(w, e)
+		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	httpx.WriteError(w, httpx.NotFound("unknown endpoint: "+r.URL.Path))
+	s.fail(w, r, httpx.NotFound("unknown endpoint: "+r.URL.Path))
 }
 
 func (s *Server) validateSearch(req *httpx.SearchRequest) (query.Query, int, bool, *httpx.APIError) {
 	var q query.Query
 	if strings.TrimSpace(req.Query) == "" {
-		return q, 0, false, httpx.InvalidRequest("'query' is required")
+		return q, 0, false, httpx.InvalidRequest("'query' must not be empty")
 	}
 	parsed, err := query.Parse(req.Query)
 	if err != nil {
 		if errors.Is(err, query.ErrTooLong) {
-			return q, 0, false, httpx.InvalidRequest("'query' must be 1-128 characters")
+			return q, 0, false, httpx.InvalidRequest("'query' must be at most 128 characters")
 		}
-		return q, 0, false, httpx.InvalidRequest("'query' must not be blank")
+		return q, 0, false, httpx.InvalidRequest("'query' must not be empty")
 	}
 	q = parsed
 
@@ -370,8 +411,11 @@ func (s *Server) validateSearch(req *httpx.SearchRequest) (query.Query, int, boo
 		count = s.cfg.Search.MaxCount
 	}
 
-	if req.OriQuestion != nil && utf8.RuneCountInString(*req.OriQuestion) > 128 {
-		return q, 0, false, httpx.InvalidRequest("'ori_question' must be at most 128 characters")
+	if req.OriQuestion != nil {
+		n := utf8.RuneCountInString(*req.OriQuestion)
+		if n < 1 || n > 128 {
+			return q, 0, false, httpx.InvalidRequest("'ori_question' must be between 1 and 128 characters")
+		}
 	}
 
 	needContent := false
@@ -381,14 +425,51 @@ func (s *Server) validateSearch(req *httpx.SearchRequest) (query.Query, int, boo
 	return q, count, needContent, nil
 }
 
+// fail writes an error, appending the reference API's request-id suffix so
+// clients that surface the message verbatim still see a correlation id.
+func (s *Server) fail(w http.ResponseWriter, r *http.Request, apiErr *httpx.APIError) {
+	if id := requestIDFrom(r.Context()); id != "" {
+		cp := *apiErr
+		cp.Message = cp.Message + " (request_id: " + id + ")"
+		apiErr = &cp
+	}
+	httpx.WriteError(w, apiErr)
+}
+
+// readJSONBody enforces the reference API's request framing rules: the body must
+// be a JSON object sent as application/json.
+func readJSONBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, *httpx.APIError) {
+	ct := r.Header.Get("Content-Type")
+	if ct != "" {
+		if mt, _, err := mime.ParseMediaType(ct); err != nil || mt != "application/json" {
+			return nil, httpx.InvalidRequest("Content-Type must be application/json")
+		}
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
+	if err != nil {
+		if isMaxBytes(err) {
+			return nil, httpx.PayloadTooLarge("Request body exceeds the configured limit")
+		}
+		if isTimeoutError(err) {
+			return nil, httpx.UpstreamTimeout("timed out reading request body")
+		}
+		return nil, httpx.InvalidRequest("failed to read request body")
+	}
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return nil, httpx.InvalidRequest("Request body must be a JSON object")
+	}
+	return trimmed, nil
+}
+
 func (s *Server) authenticate(r *http.Request) (*auth.Key, *httpx.APIError) {
 	return s.auth.Authenticate(bearerToken(r), s.clientIP(r))
 }
 
-func (s *Server) acquire(w http.ResponseWriter) bool {
+func (s *Server) acquire(w http.ResponseWriter, r *http.Request) bool {
 	if !s.sem.TryAcquire() {
 		s.metrics.Inc("onesearch_rate_limited_total", "reason", "concurrency")
-		httpx.WriteError(w, httpx.RateLimited("server is at capacity, retry later", time.Second))
+		s.fail(w, r, httpx.RateLimited("server is at capacity, retry later", time.Second))
 		return false
 	}
 	s.inflight.Add(1)
@@ -408,7 +489,7 @@ func (s *Server) writeError(w http.ResponseWriter, err error, r *http.Request) {
 		s.logger.Error("upstream failure",
 			"error", err.Error(), "path", r.URL.Path, "request_id", requestIDFrom(r.Context()))
 	}
-	httpx.WriteError(w, apiErr)
+	s.fail(w, r, apiErr)
 }
 
 func (s *Server) noteKey(r *http.Request, name string) {
@@ -530,6 +611,7 @@ func randomID() string {
 	return hex.EncodeToString(b[:])
 }
 
+// isMaxBytes reports whether err is the MaxBytesReader overflow error.
 func isMaxBytes(err error) bool {
 	var mbe *http.MaxBytesError
 	return errors.As(err, &mbe)
@@ -541,26 +623,4 @@ func isTimeoutError(err error) bool {
 	}
 	var ne net.Error
 	return errors.As(err, &ne) && ne.Timeout()
-}
-
-// decodeError maps a request-body decode failure to the documented error
-// contract: 413 for oversized bodies, 408 for read timeouts, 400 otherwise.
-func decodeBodyError(err error) *httpx.APIError {
-	switch {
-	case isMaxBytes(err):
-		return tooLarge()
-	case isTimeoutError(err):
-		e := httpx.NewAPIError(http.StatusRequestTimeout, httpx.TypeTimeout, "timed out reading request body")
-		e.Code = "request_timeout"
-		return e
-	default:
-		return httpx.InvalidRequest("request body must be a valid JSON object")
-	}
-}
-
-func tooLarge() *httpx.APIError {
-	e := httpx.InvalidRequest("request body is too large")
-	e.Status = http.StatusRequestEntityTooLarge
-	e.Code = "payload_too_large"
-	return e
 }

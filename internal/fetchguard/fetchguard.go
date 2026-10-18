@@ -20,6 +20,16 @@ var ErrInvalid = errors.New("invalid url")
 // ErrBlocked means the URL targets a blocked destination (HTTP 403).
 var ErrBlocked = errors.New("url blocked by security policy")
 
+// Specific validation failures, each mapped to the reference API's message.
+var (
+	ErrEmptyURL    = fmt.Errorf("%w: empty url", ErrInvalid)
+	ErrURLTooLong  = fmt.Errorf("%w: url too long", ErrInvalid)
+	ErrBadScheme   = fmt.Errorf("%w: bad scheme", ErrInvalid)
+	ErrNoHost      = fmt.Errorf("%w: missing host", ErrInvalid)
+	ErrCredentials = fmt.Errorf("%w: credentials in url", ErrInvalid)
+	ErrBadPort     = fmt.Errorf("%w: bad port", ErrInvalid)
+)
+
 var blockedCIDRs = mustParseCIDRs(
 	"0.0.0.0/8",
 	"10.0.0.0/8",
@@ -101,29 +111,29 @@ func New(allowPrivate bool, ports []int, maxRedirects int) *Guard {
 // ValidateURL checks scheme, host, credentials, port and hostname denylist.
 // It does not resolve DNS.
 func (g *Guard) ValidateURL(raw string) (*url.URL, error) {
-	if raw == "" {
-		return nil, fmt.Errorf("%w: url is empty", ErrInvalid)
+	if strings.TrimSpace(raw) == "" {
+		return nil, ErrEmptyURL
 	}
 	if len(raw) > 8192 {
-		return nil, fmt.Errorf("%w: url exceeds 8192 characters", ErrInvalid)
+		return nil, ErrURLTooLong
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+		return nil, fmt.Errorf("%w: %v", ErrBadScheme, err)
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return nil, fmt.Errorf("%w: scheme must be http or https", ErrInvalid)
+		return nil, fmt.Errorf("%w: scheme must be http or https", ErrBadScheme)
 	}
 	if u.Host == "" || u.Hostname() == "" {
-		return nil, fmt.Errorf("%w: url must contain a host", ErrInvalid)
+		return nil, ErrNoHost
 	}
 	if u.User != nil {
-		return nil, fmt.Errorf("%w: url must not contain credentials", ErrInvalid)
+		return nil, ErrCredentials
 	}
 	if u.Port() != "" {
 		port, perr := net.LookupPort("tcp", u.Port())
 		if perr != nil {
-			return nil, fmt.Errorf("%w: invalid port", ErrInvalid)
+			return nil, fmt.Errorf("%w: invalid port", ErrBadPort)
 		}
 		if !g.ports[port] {
 			return nil, fmt.Errorf("%w: port %d is not allowed", ErrBlocked, port)

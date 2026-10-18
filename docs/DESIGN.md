@@ -63,34 +63,37 @@ Base: `http://<host>:<port>`，两个端点均为 `POST`、`application/json`、
 {
   "results": [
     {
-      "rerank_score": 2.41,
       "title": "...",
-      "url": "https://...",
-      "snippet": "...",
-      "summary": "...",
-      "content": "",
       "site_name": "GitHub",
       "site_icon": "https://github.com/favicon.ico",
-      "date": "2026-10-01T00:00:00Z",
-      "authority": 3
+      "authority": 3,
+      "rerank_score": 2.41,
+      "date": "2026-10-01T00:00:00+00:00",
+      "url": "https://...",
+      "summary": "...",
+      "snippet": "...",
+      "content": ""
     }
   ]
 }
 ```
 
+- 字段顺序与官方线序一致（`title, site_name, site_icon, authority, rerank_score, date,
+  url, summary, snippet, content`）。
 - `results` **始终存在**，无结果时为 `[]`（不是 null）。
 - 10 个字段**始终出现**；未知的可空字段输出 `null`，字符串字段输出 `""`。
-- `rerank_score` ∈ [0,3]，保留两位小数。
-- `authority` ∈ [-1,4]，`-1` 表示未知。
-- `date` 为 UTC RFC3339 或 `null`。
+- `rerank_score` ∈ [0,3]，保留两位小数（官方为全精度浮点，数值本身不可比）。
+- `authority` ∈ [-1,4]，`-1` 表示未知（官方实测出现 1–4）。
+- `date` 为 UTC RFC3339 且显式 `+00:00` 偏移（官方实测不是 `Z`），未知为 `null`。
 
 ### 2.3 Fetch
 
 请求 `{"url": "https://example.com/a"}`：
 `url` 必填、≤8192 字符、必须是有 host 的 http/https、不能带 userinfo。
 
-响应 `{"title": "...", "content": "# Markdown 正文"}`，两字段始终存在。
-抽取不到正文时返回 404（与官方语义一致）。
+响应 `{"content": "# Markdown 正文", "title": "..."}`，两字段始终存在。
+与官方实测一致：HTML 之外的 `text/plain`、`text/markdown`、`text/css`、
+`text/javascript`、`application/json` 会原样返回；XML / CSV / PDF / 图片等返回 404。
 
 ### 2.4 搜索语法
 
@@ -114,20 +117,20 @@ OpenAI 兼容形状，`param` 恒为 `null`：
 
 | HTTP | type | code | 触发 |
 |---|---|---|---|
-| 400 | invalid_request_error | invalid_request_error | JSON 错误、字段非法、query 全空白 |
-| 401 | authentication_error | invalid_api_key | Bearer 缺失/无效 |
-| 402 | insufficient_quota | insufficient_quota | 每日配额耗尽 |
-| 403 | permission_error | permission_error | SSRF / 抓取安全策略拒绝 |
-| 404 | not_found_error | not_found | Fetch 无可用正文 |
-| 405 | invalid_request_error | method_not_allowed | 端点存在但方法不对（扩展） |
-| 408 | timeout_error | request_timeout | 客户端请求体读取超时 |
-| 413 | invalid_request_error | payload_too_large | 请求体 / 抓取页面超过上限 |
+| 400 | invalid_request_error | invalid_request_error | JSON 错误、字段非法、query 全空白、Content-Type 不对、body 非对象 |
+| 401 | authentication_error | invalid_request_error | Bearer 缺失/无效（文案与官方一致） |
+| 402 | insufficient_quota | insufficient_quota | 每日配额耗尽（自托管扩展） |
+| 404 | not_found_error | invalid_request_error | Fetch 一切失败：无正文 / 上游错误 / 媒体类型不支持 / SSRF 拦截 |
+| 405 | —（空响应体） | — | 端点存在但方法不对，响应头 `Allow: POST`（与官方一致） |
+| 408 | gateway_timeout_error | gateway_timeout_error | 客户端请求体读取超时（官方未实测，沿用同族 type） |
+| 413 | payload_too_large_error | invalid_request_error | 请求体 / 抓取页面超过上限 |
 | 429 | rate_limit_error | rate_limit_exceeded | RPM 超限或全局并发满 |
-| 500 | server_error | internal_error | 未预期错误 |
-| 504 | timeout_error | upstream_timeout | 所有上游超时 |
+| 500 | server_error | server_error | 未预期错误 |
+| 504 | gateway_timeout_error | gateway_timeout_error | 上游超时 |
 
-官方只文档化了 `invalid_request_error`；上表其余 code 是本服务的扩展，信封形状保持兼容。
-429/402 响应带 `Retry-After`（秒）与 `X-Request-Id`。
+上表 400/401/404/405/413/504 的 type+code 组合均来自 2026-10-18 的官方实测；
+402/408/429 官方本次未触发，属自托管扩展。消息末尾统一追加 `(request_id: …)`，
+与官方一致。429/402 响应带 `Retry-After`（秒）与 `X-Request-Id`。
 
 ---
 
@@ -246,9 +249,9 @@ Bing 两个渠道额外共享一套 `bingSession`（§4.1）：首页预热 cook
 |---|---|---|
 | `title` | 引擎 | 去 HTML 标签、合并空白、截断 300 字符 |
 | `url` | 引擎 | 归一化后的绝对 URL |
-| `snippet` | 引擎 content/description | 去标签、反转义、合并空白，截 200 字符（优先 100～200） |
-| `summary` | `content` 或组内 snippets | 有正文：取正文前 800 字符内最后一句边界（目标 600～800）；无正文：拼接组内 snippet 至约 600 字符；再退化为 snippet |
-| `content` | 抓取 | `need_content=false` 恒 `""`；true 时为 Markdown，失败为空串 |
+| `snippet` | 引擎 content/description | 去标签、反转义、合并空白，截 360 字符（官方实测 80–364） |
+| `summary` | `content` 或组内 snippets | 有正文：取正文前 1600 字符内最后一句边界（目标 800～1600）；无正文：拼接组内 snippet 至约 1200 字符；再退化为 snippet（官方实测 144–4386） |
+| `content` | 抓取 | `need_content=false` 恒 `""`；true 时按 `need_content_max_results`（默认 20）抓取，失败为空串 |
 | `site_name` | 域名映射表 → 页面 `og:site_name` → 注册域 | 内置约 120 条常见站点映射，未知回退注册域（如 `example.com`） |
 | `site_icon` | 模板 | 默认 `https://{host}/favicon.ico`，可配置模板 |
 | `date` | RSS pubDate / SearXNG publishedDate / Tavily published_date / 页面 meta | 多格式解析后统一 UTC RFC3339；失败为 `null` |
@@ -293,13 +296,15 @@ score  = clamp(3*(raw+boost), 0, 3)
    - 解析后的每个 IP 都校验：loopback、私网（10/8、172.16/12、192.168/16）、CGNAT 100.64/10、
      link-local 169.254/16、组播、未指定 0.0.0.0、IPv6 ULA fc00::/7、IPv4-mapped IPv6。
    - **自定义 Dialer 用已校验的 IP 直连**，避免 DNS rebinding。
-   - 重定向逐跳复检（≤5 跳），跨协议降级拒绝。
+   - 重定向逐跳复检（≤15 跳，官方实测 12 跳仍成功），跨协议降级拒绝。
    - `fetch.allow_private=true` 可关闭（仅本地调试），默认 false。
-3. **读取限制**：超时 10s、响应体 ≤5MB、仅接受 `text/html`/`application/xhtml+xml`/`text/plain`。
+3. **读取限制**：超时 10s、响应体 ≤5MB、媒体类型白名单与官方实测一致
+   （HTML / 纯文本 / Markdown / CSS / JS / JSON 可抓；XML / CSV / PDF / 图片 404）。
 4. **抽取**：charset 嗅探 → readability 找正文 → HTML 转 Markdown；标题取 readability/`<title>`。
-   正文少于 `fetch.min_content_runes`（默认 120）判为无正文 → 404。
+   HTML 正文少于 `fetch.min_content_runes`（默认 120）判为无正文；纯文本文档不做该下限。
 5. **缓存**：按归一化 URL 缓存成功结果，TTL 30min，singleflight 合并并发请求。
-6. 失败映射：SSRF/策略 → 403；无正文 → 404；超时 → 504；页面过大 → 413。
+6. 失败映射（对齐官方实测）：URL 校验失败 → 400；其余一切失败（SSRF、上游错误、无正文、
+   媒体类型不支持）→ 404 `failed to fetch URL`；超时 → 504；页面过大 → 413。
 
 ---
 
@@ -399,8 +404,8 @@ provider 级 Browser 指纹字段（Bing/DDG 生效，其余类型忽略）：
 | 每日配额耗尽 | 402 |
 | Key 白名单 | 过滤不可用 provider，不报错；全过滤时 200 + `[]` |
 | need_content=true | 结果 `content` 非空（假页面服务器）；失败时 `""` |
-| fetch 正常 | 200 `{title,content}`，content 为 Markdown |
-| fetch 私网/loopback/`file://`/带 userinfo | 403 / 400 |
+| fetch 正常 | 200 `{content,title}`，content 为 Markdown |
+| fetch 私网/loopback/`file://`/带 userinfo | 404（私网/loopback）/ 400（scheme、userinfo），与官方实测一致 |
 | fetch 无正文页 | 404 |
 | fetch 超大页 | 413 |
 | 缓存命中 | 第二次请求 provider 调用次数不增加 |

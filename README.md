@@ -75,20 +75,23 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8080/v1/tools/search `
 {
   "results": [
     {
-      "rerank_score": 2.77,
       "title": "deepseek-ai/DeepSeek-V4-Pro-0813 · Hugging Face",
-      "url": "https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro-0813",
-      "snippet": "...",
-      "summary": "...",
-      "content": "",
       "site_name": "huggingface.co",
       "site_icon": "https://huggingface.co/favicon.ico",
-      "date": "2026-10-16T14:38:00Z",
-      "authority": -1
+      "authority": -1,
+      "rerank_score": 2.77,
+      "date": "2026-10-16T14:38:00+00:00",
+      "url": "https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro-0813",
+      "summary": "...",
+      "snippet": "...",
+      "content": ""
     }
   ]
 }
 ```
+
+> 字段顺序与官方一致（`title, site_name, site_icon, authority, rerank_score, date, url,
+> summary, snippet, content`）。
 
 > **Bing 渠道说明**：RSS 与 HTML 是同一个搜索后端的两种渲染，**同一 query 的结果集完全一致**，
 > 不存在「RSS 质量差」。真正的坑是 Bing 偶发返回 `200 + 空 channel`（软限流），或者
@@ -218,9 +221,13 @@ Bing 的 RSS 与 HTML 共用一套搜索后端，区别只是渲染方式：
 | `count` | int | 否 | 1～50，默认 10 |
 | `ori_question` | string/null | 否 | ≤128 字符；v1 仅记录，不参与排序 |
 | `localization` | string | 否 | 接收但忽略（无 GeoIP） |
-| `need_content` | bool | 否 | 为 true 时对前 N 条抓取正文填入 `content` |
+| `need_content` | bool | 否 | 为 true 时对前 N 条抓取正文填入 `content`（默认 N=20；官方抓全部） |
 
-响应固定 10 个字段，`results` 恒为数组（无结果 `[]`）。可空字段输出 `null`。
+请求必须带 `Content-Type: application/json`，body 必须是 JSON 对象；鉴权先于参数校验
+（与官方一致：Key 不对时即使 body 非法也返回 401）。
+
+响应固定 10 个字段，字段顺序与官方一致；`results` 恒为数组（无结果 `[]`）。可空字段输出 `null`，
+`date` 为 `+00:00` 偏移的 UTC 时间。
 
 ### `POST /v1/tools/fetch`
 
@@ -228,29 +235,32 @@ Bing 的 RSS 与 HTML 共用一套搜索后端，区别只是渲染方式：
 {"url": "https://example.com/article"}
 ```
 
-返回 `{"title": "...", "content": "# Markdown"}`；抽取不到正文返回 404。
+返回 `{"content": "# Markdown 正文", "title": "标题"}`。与官方一致：HTML 之外的
+`text/plain`、`text/markdown`、`text/css`、`text/javascript`、`application/json` 也会原样返回；
+XML / CSV / PDF / 图片等返回 404。
 
 ### 错误码
 
-| HTTP | type | 触发 |
-|---|---|---|
-| 400 | invalid_request_error | JSON/字段非法、query 全空白、count 越界、URL 非法 |
-| 401 | authentication_error | Bearer 缺失/错误 |
-| 402 | insufficient_quota | 每日配额耗尽 |
-| 403 | permission_error | SSRF 拦截 |
-| 404 | not_found_error | 页面无正文 / 上游不可用 |
-| 413 | invalid_request_error | 请求体或页面超限 |
-| 429 | rate_limit_error | RPM 超限 / 全局并发满 |
-| 500 / 504 | server_error / timeout_error | 内部错误 / 上游超时 |
+| HTTP | type | code | 触发 |
+|---|---|---|---|
+| 400 | invalid_request_error | invalid_request_error | JSON/字段非法、query 全空白、count 越界、URL 非法、Content-Type 不对 |
+| 401 | authentication_error | invalid_request_error | Bearer 缺失/错误（文案与官方一致） |
+| 402 | insufficient_quota | insufficient_quota | 每日配额耗尽（自托管扩展） |
+| 404 | not_found_error | invalid_request_error | fetch 一切失败：无正文 / 上游不可用 / 媒体类型不支持 / SSRF 拦截 |
+| 405 | —（空响应体） | — | 方法不对，响应头 `Allow: POST` |
+| 413 | payload_too_large_error | invalid_request_error | 请求体或页面超限 |
+| 429 | rate_limit_error | rate_limit_exceeded | RPM 超限 / 全局并发满 |
+| 500 / 504 | server_error / gateway_timeout_error | 同 type | 内部错误 / 上游超时 |
 
-官方只文档化了 `invalid_request_error`；其余 code 是本服务的扩展，信封形状保持一致。
-429/402 带 `Retry-After`，所有响应带 `X-Request-Id`。
+信封与官方一致：`{"error":{"message","type","param":null,"code"}}`，message 末尾带
+`(request_id: …)`；429/402 带 `Retry-After`，所有响应带 `X-Request-Id` 与 CORS 头。
 
 ---
 
 ## 与官方实现的差异（务必先读）
 
-逐条官方契约核对（实现状态、测试证据、未实测项）见 **[docs/COMPAT.md](docs/COMPAT.md)**。
+官方契约已用真实 API Key 逐项实测对照，完整证据见 **[docs/COMPAT.md](docs/COMPAT.md)**；
+`internal/compat/official_test.go` 把这些事实固化成了可重跑测试。仍然保留的差异：
 
 1. **分数和摘要不可比。** `rerank_score` 是 RRF + 权威性 + 时效性的启发式映射；
    `authority` 是域名分级表；`summary` 是正文截断或摘要拼接。字段形状与取值范围一致，
@@ -259,8 +269,11 @@ Bing 的 RSS 与 HTML 共用一套搜索后端，区别只是渲染方式：
 3. **`localization` 不生效**（没有 GeoIP 库）。
 4. **`ori_question` 不参与排序**（v1 无 LLM 富化）。
 5. **provider 白名单是过滤，不是报错**：过滤后没有可用源时返回 `{"results":[]}`。
-6. **`need_content` 有上限**：默认只对前 10 条抓正文，失败的结果 `content` 为 `""`。
-7. **不支持 JS 渲染**：SPA 页面抓取失败率高于官方。
+6. **`need_content` 有上限**：默认只对前 20 条抓正文（官方抓全部），失败的结果 `content` 为 `""`。
+7. **乱码查询可能返回空数组**：有离题结果过滤；官方会返回 10 条低分结果。
+8. **`site_icon` 用自有模板**（默认 `<host>/favicon.ico`）；官方统一用
+   `https://cdn.deepseek.com/site-icons/<domain>`，可用 `site_icon_template` 改成后者。
+9. **不支持 JS 渲染**：SPA 页面抓取失败率高于官方。
 
 ---
 
@@ -317,6 +330,9 @@ go build -o onesearch ./cmd/onesearch
 # 真实网络冒烟（可选）
 go test ./internal/provider -tags live -run TestLiveBingCN -v -count=1
 ONESEARCH_LIVE_INTL=1 go test ./internal/provider -tags live -run TestLiveBingIntl -v -count=1  # 需在境外机器执行
+
+# 官方契约对照（可选，会消耗少量官方额度；事实清单见 docs/COMPAT.md §8）
+DEEPSEEK_API_KEY=sk-... go test ./internal/compat -tags official -v -count=1
 ```
 
 项目结构：
@@ -326,6 +342,7 @@ cmd/onesearch/            入口
 internal/api/             路由、中间件、两个 handler、/healthz、/metrics
 internal/auth/            Key 鉴权、RPM、每日配额
 internal/cache/           TTL-LRU + singleflight
+internal/compat/          官方接口对照 golden 测试（-tags official）
 internal/config/          YAML + 环境变量 + 校验
 internal/enrich/          snippet/summary/site/date 富化
 internal/extract/         HTML → 标题 / 正文 / Markdown

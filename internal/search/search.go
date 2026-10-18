@@ -459,7 +459,7 @@ func (s *Service) buildResult(it rank.Item, page *extract.Page) httpx.SearchResu
 		Content:     truncateRunes(content, 200_000),
 		SiteName:    enrich.SiteName(it.Host, fetchedSite),
 		SiteIcon:    enrich.Icon(it.Host, s.cfg.SiteIconTemplate),
-		Date:        enrich.DatePtr(date),
+		Date:        httpx.NewDate(date),
 		Authority:   it.Authority,
 	}
 }

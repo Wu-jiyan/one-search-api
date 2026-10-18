@@ -14,6 +14,7 @@ import (
 
 	"github.com/wujiyan/one-search-api/internal/config"
 	"github.com/wujiyan/one-search-api/internal/fetchsvc"
+	"github.com/wujiyan/one-search-api/internal/httpx"
 	"github.com/wujiyan/one-search-api/internal/obs"
 	"github.com/wujiyan/one-search-api/internal/provider"
 	"github.com/wujiyan/one-search-api/internal/query"
@@ -148,7 +149,7 @@ func TestSearchBasic(t *testing.T) {
 type httpxResult struct {
 	score     float64
 	authority int
-	date      *time.Time
+	date      *httpx.Date
 }
 
 func TestSearchCache(t *testing.T) {
