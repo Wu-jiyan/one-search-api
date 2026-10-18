@@ -122,6 +122,12 @@ curl -s http://127.0.0.1:8080/v1/tools/search \
 
 默认 Key 是 `sk-change-me-please`，**上线前务必改掉**（见下方配置说明）。
 
+### 接入 DeepSeek Harness（DSH）
+
+DSH 内置 `@deepseek-ai/dsh-web-deepseek-api` 提供方，把它的 `baseURL` 指向
+`http://127.0.0.1:8080/v1/tools` 即可让 DSH 的 `web_search` / `web_fetch` 走本服务
+（已实测热加载生效）。完整步骤、验证与回滚见 **[docs/DSH.md](docs/DSH.md)**。
+
 ---
 
 ## 配置
@@ -357,6 +363,8 @@ internal/rank/            归一化、去重、RRF 融合、打分
 internal/search/          并发扇出、hedge、正文补齐
 internal/siteinfo/        域名 → authority / 站点名 / favicon
 docs/DESIGN.md            设计文档（契约、字段映射、验收标准）
+docs/DSH.md               接入 DeepSeek Harness 的配置、验证与回滚
+deploy/windows/           Windows 启动脚本
 ```
 
 ---
