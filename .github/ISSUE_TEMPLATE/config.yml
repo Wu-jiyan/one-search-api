@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: https://github.com/Wu-jiyan/one-search-api/security/advisories/new
+    about: Report vulnerabilities privately; never in a public issue.
+  - name: Measured contract & known deviations
+    url: https://github.com/Wu-jiyan/one-search-api/blob/main/docs/COMPAT.md
+    about: Check what was measured against the reference API before filing a compatibility issue.
+  - name: Deployment & config questions
+    url: https://github.com/Wu-jiyan/one-search-api/blob/main/README.en.md
+    about: Quick start, providers, environment overrides and known limitations.

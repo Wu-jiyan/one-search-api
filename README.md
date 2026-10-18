@@ -8,6 +8,8 @@
 [![Go](https://img.shields.io/badge/go-1.27-00ADD8.svg)](go.mod)
 [![Contract](https://img.shields.io/badge/contract-measured%20vs%20official-brightgreen.svg)](docs/COMPAT.md)
 
+[English](README.en.md) | **中文**
+
 自托管、与 **DeepSeek Search / Fetch API 格式兼容**的搜索与抓取服务。
 用 Go 写成单二进制，后端聚合免费搜索源（SearXNG / Bing 国内版与国际版 / DuckDuckGo / Brave / Tavily），
 对外暴露和 DeepSeek 一样的两个接口：
@@ -51,6 +53,14 @@ POST /v1/tools/fetch    → {"title":"...","content":"# Markdown 正文"}
 ---
 
 ## 快速开始（不需要 SearXNG）
+
+### 预编译二进制 / Docker
+
+- **二进制**：从 [Releases](https://github.com/Wu-jiyan/one-search-api/releases) 下载
+  `linux/amd64`、`linux/arm64`、`darwin/amd64`、`darwin/arm64`、`windows/amd64`，
+  压缩包里附 `config.example.yaml`。
+- **Docker**：`docker build -t one-search-api . && docker run -p 8080:8080 one-search-api`
+  （含 SearXNG 的完整部署见下方 compose）。
 
 默认配置只启用 **Bing RSS**，开箱即可用：
 
@@ -268,6 +278,33 @@ XML / CSV / PDF / 图片等返回 404。
 
 信封与官方一致：`{"error":{"message","type","param":null,"code"}}`，message 末尾带
 `(request_id: …)`；429/402 带 `Retry-After`，所有响应带 `X-Request-Id` 与 CORS 头。
+
+---
+
+## 官方契约实测（摘要）
+
+2026-10-18 用真实 Key 对 `api.deepseek.com` 逐项实测（60+ 请求）。完整矩阵、原始记录与
+仍保留的偏差见 **[docs/COMPAT.md](docs/COMPAT.md)**，每条事实都由可重跑的 golden 测试
+`internal/compat/official_test.go` 锁定。摘要：
+
+| 项目 | 官方实测 | 本服务 |
+|---|---|---|
+| 响应字段 | 10 个，顺序 `title…content` | 顺序一致 |
+| `date` | `+00:00` 偏移，或 `null` | 一致 |
+| `count` | 1–50，默认 10；`50` → 50 条 | 边界一致（能否填满取决于源） |
+| `query` | ≤128 **字符（rune）** | 一致 |
+| `ori_question` | 1–128；空串 → 400 | 校验一致；不参与排序 |
+| 鉴权顺序 | 先 401，再做任何 body 校验 | 一致 |
+| `Content-Type` | 必须 `application/json`，否则 400 | 一致 |
+| body 形状 | 必须是 JSON 对象；`[]`/空 → 400 | 一致 |
+| `405` | 空响应体 + `Allow: POST` | 一致 |
+| `401`/`413`/`504` | `authentication_error` / `payload_too_large_error` / `gateway_timeout_error` | 一致 |
+| `404`（fetch） | `failed to fetch URL`，私网/被拦也用它 | 一致 |
+| fetch 媒体类型 | 接受 text/plain、markdown、css、js、json；xml/csv/pdf/图片 → 404 | 一致 |
+| `need_content` | **全部**返回结果都填正文 | 全部（≤50），尽力而为 |
+| `snippet`/`summary` | 80–364 / 144–4386 字符 | 启发式，上限按实测对齐 |
+| `rerank_score` | 全精度浮点，实测 0.10–2.29 | 启发式两位小数，数值不可比 |
+| fetch 重定向 | 12 跳仍 200 | `max_redirects: 15` |
 
 ---
 

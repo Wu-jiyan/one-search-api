@@ -1,0 +1,67 @@
+name: Bug report
+description: Report a reproducible bug (wrong response, crash, failed fetch, ...)
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please do **not** include API keys or private URLs.
+
+        For security issues use [SECURITY.md](https://github.com/Wu-jiyan/one-search-api/blob/main/SECURITY.md)
+        instead of this form.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: Actual behavior, including the response body if relevant.
+      placeholder: |
+        POST /v1/tools/search returned 500 with ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      placeholder: The reference API returns 200 with 10 results.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Request payload, config (redact keys), version or commit.
+      placeholder: |
+        1. build at commit ...
+        2. config (redacted): ...
+        3. curl -s ... -d '{"query":"..."}'
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      placeholder: v0.1.0 or git rev-parse HEAD
+  - type: dropdown
+    id: providers
+    attributes:
+      label: Enabled providers
+      multiple: true
+      options:
+        - bingrss
+        - binghtml
+        - searxng
+        - duckduckgo
+        - brave
+        - tavily
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      placeholder: OS, Go version, deployment (binary / docker / compose), network region
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Server log lines around the request (redact keys). `request_id` helps.
+      render: text
