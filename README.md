@@ -1,5 +1,13 @@
 # one-search-api
 
+> Self-hosted, DeepSeek Search / Fetch API-compatible web search & fetch service in Go.
+> One `base_url` for your agent, many free search backends behind it.
+
+[![CI](https://github.com/Wu-jiyan/one-search-api/actions/workflows/ci.yml/badge.svg)](https://github.com/Wu-jiyan/one-search-api/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Go](https://img.shields.io/badge/go-1.27-00ADD8.svg)](go.mod)
+[![Contract](https://img.shields.io/badge/contract-measured%20vs%20official-brightgreen.svg)](docs/COMPAT.md)
+
 自托管、与 **DeepSeek Search / Fetch API 格式兼容**的搜索与抓取服务。
 用 Go 写成单二进制，后端聚合免费搜索源（SearXNG / Bing 国内版与国际版 / DuckDuckGo / Brave / Tavily），
 对外暴露和 DeepSeek 一样的两个接口：
@@ -398,3 +406,11 @@ deploy/windows/           Windows 启动脚本
 ## License
 
 MIT
+
+## 免责声明
+
+本项目仅供个人学习与自用。它通过模拟浏览器请求聚合公开搜索结果，**不破解验证码、不绕过付费墙**，
+但抓取行为仍受各上游服务的使用条款约束（见上文「安全 → 已知合规注意」）。
+开源与分发不构成对任何上游服务的授权，使用者需自行评估合规风险；维护者不对使用后果负责。
+安全问题请按 [SECURITY.md](SECURITY.md) 私下报告，不要开公开 issue。
+

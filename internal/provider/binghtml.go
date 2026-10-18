@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/wujiyan/one-search-api/internal/query"
+	"github.com/Wu-jiyan/one-search-api/internal/query"
 )
 
 // bingHTML scrapes the regular Bing web results page. It shares Bing's backend

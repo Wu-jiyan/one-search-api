@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wujiyan/one-search-api/internal/provider"
-	"github.com/wujiyan/one-search-api/internal/query"
+	"github.com/Wu-jiyan/one-search-api/internal/provider"
+	"github.com/Wu-jiyan/one-search-api/internal/query"
 )
 
 func mustQuery(t *testing.T, raw string) query.Query {

@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/wujiyan/one-search-api/internal/query"
+	"github.com/Wu-jiyan/one-search-api/internal/query"
 )
 
 type duckDuckGo struct {

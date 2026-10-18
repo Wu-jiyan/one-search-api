@@ -16,8 +16,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wujiyan/one-search-api/internal/config"
-	"github.com/wujiyan/one-search-api/internal/query"
+	"github.com/Wu-jiyan/one-search-api/internal/config"
+	"github.com/Wu-jiyan/one-search-api/internal/query"
 )
 
 const bingSessionTTL = 30 * time.Minute

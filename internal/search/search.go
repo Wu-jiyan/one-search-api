@@ -11,17 +11,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wujiyan/one-search-api/internal/cache"
-	"github.com/wujiyan/one-search-api/internal/config"
-	"github.com/wujiyan/one-search-api/internal/enrich"
-	"github.com/wujiyan/one-search-api/internal/extract"
-	"github.com/wujiyan/one-search-api/internal/fetchsvc"
-	"github.com/wujiyan/one-search-api/internal/httpx"
-	"github.com/wujiyan/one-search-api/internal/limit"
-	"github.com/wujiyan/one-search-api/internal/obs"
-	"github.com/wujiyan/one-search-api/internal/provider"
-	"github.com/wujiyan/one-search-api/internal/query"
-	"github.com/wujiyan/one-search-api/internal/rank"
+	"github.com/Wu-jiyan/one-search-api/internal/cache"
+	"github.com/Wu-jiyan/one-search-api/internal/config"
+	"github.com/Wu-jiyan/one-search-api/internal/enrich"
+	"github.com/Wu-jiyan/one-search-api/internal/extract"
+	"github.com/Wu-jiyan/one-search-api/internal/fetchsvc"
+	"github.com/Wu-jiyan/one-search-api/internal/httpx"
+	"github.com/Wu-jiyan/one-search-api/internal/limit"
+	"github.com/Wu-jiyan/one-search-api/internal/obs"
+	"github.com/Wu-jiyan/one-search-api/internal/provider"
+	"github.com/Wu-jiyan/one-search-api/internal/query"
+	"github.com/Wu-jiyan/one-search-api/internal/rank"
 )
 
 // Source is one configured provider plus its runtime protections.

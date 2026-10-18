@@ -204,7 +204,7 @@ func Default() *Config {
 			MaxBytes:        5 << 20, // 5 MiB
 			MaxRedirects:    15,
 			AllowPorts:      []int{80, 443, 8080, 8443},
-			UserAgent:       "Mozilla/5.0 (compatible; OneSearchAPI/1.0; +https://github.com/wujiyan/one-search-api)",
+			UserAgent:       "Mozilla/5.0 (compatible; OneSearchAPI/1.0; +https://github.com/Wu-jiyan/one-search-api)",
 			CacheTTL:        Duration(30 * time.Minute),
 			MinContentRunes: 120,
 		},

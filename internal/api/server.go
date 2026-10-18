@@ -20,14 +20,14 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/wujiyan/one-search-api/internal/auth"
-	"github.com/wujiyan/one-search-api/internal/config"
-	"github.com/wujiyan/one-search-api/internal/fetchsvc"
-	"github.com/wujiyan/one-search-api/internal/httpx"
-	"github.com/wujiyan/one-search-api/internal/limit"
-	"github.com/wujiyan/one-search-api/internal/obs"
-	"github.com/wujiyan/one-search-api/internal/query"
-	"github.com/wujiyan/one-search-api/internal/search"
+	"github.com/Wu-jiyan/one-search-api/internal/auth"
+	"github.com/Wu-jiyan/one-search-api/internal/config"
+	"github.com/Wu-jiyan/one-search-api/internal/fetchsvc"
+	"github.com/Wu-jiyan/one-search-api/internal/httpx"
+	"github.com/Wu-jiyan/one-search-api/internal/limit"
+	"github.com/Wu-jiyan/one-search-api/internal/obs"
+	"github.com/Wu-jiyan/one-search-api/internal/query"
+	"github.com/Wu-jiyan/one-search-api/internal/search"
 )
 
 type ctxKey int

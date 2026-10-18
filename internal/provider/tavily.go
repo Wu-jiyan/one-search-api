@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/wujiyan/one-search-api/internal/query"
+	"github.com/Wu-jiyan/one-search-api/internal/query"
 )
 
 type tavily struct {

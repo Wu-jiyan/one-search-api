@@ -7,7 +7,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/wujiyan/one-search-api/internal/query"
+	"github.com/Wu-jiyan/one-search-api/internal/query"
 )
 
 // bingRSS uses Bing's RSS rendering of the same result set as the HTML page.

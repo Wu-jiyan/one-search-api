@@ -10,7 +10,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/wujiyan/one-search-api/internal/siteinfo"
+	"github.com/Wu-jiyan/one-search-api/internal/siteinfo"
 )
 
 var (

@@ -3,7 +3,7 @@ package provider
 import (
 	"strings"
 
-	"github.com/wujiyan/one-search-api/internal/query"
+	"github.com/Wu-jiyan/one-search-api/internal/query"
 )
 
 // resultsRelevance is the fraction of results that mention at least one query

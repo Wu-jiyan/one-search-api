@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wujiyan/one-search-api/internal/enrich"
-	"github.com/wujiyan/one-search-api/internal/provider"
-	"github.com/wujiyan/one-search-api/internal/query"
-	"github.com/wujiyan/one-search-api/internal/siteinfo"
+	"github.com/Wu-jiyan/one-search-api/internal/enrich"
+	"github.com/Wu-jiyan/one-search-api/internal/provider"
+	"github.com/Wu-jiyan/one-search-api/internal/query"
+	"github.com/Wu-jiyan/one-search-api/internal/siteinfo"
 )
 
 // Item is one fused search result with its computed score.

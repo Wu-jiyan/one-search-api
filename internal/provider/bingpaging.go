@@ -3,7 +3,7 @@ package provider
 import (
 	"context"
 
-	"github.com/wujiyan/one-search-api/internal/query"
+	"github.com/Wu-jiyan/one-search-api/internal/query"
 )
 
 // bingMaxPages bounds pagination so a single provider call stays predictable.

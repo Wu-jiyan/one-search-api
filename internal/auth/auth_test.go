@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wujiyan/one-search-api/internal/config"
-	"github.com/wujiyan/one-search-api/internal/httpx"
+	"github.com/Wu-jiyan/one-search-api/internal/config"
+	"github.com/Wu-jiyan/one-search-api/internal/httpx"
 )
 
 func testAuthConfig() config.AuthConfig {

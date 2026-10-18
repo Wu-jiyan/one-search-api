@@ -13,12 +13,12 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/wujiyan/one-search-api/internal/cache"
-	"github.com/wujiyan/one-search-api/internal/config"
-	"github.com/wujiyan/one-search-api/internal/extract"
-	"github.com/wujiyan/one-search-api/internal/fetchguard"
-	"github.com/wujiyan/one-search-api/internal/httpx"
-	"github.com/wujiyan/one-search-api/internal/obs"
+	"github.com/Wu-jiyan/one-search-api/internal/cache"
+	"github.com/Wu-jiyan/one-search-api/internal/config"
+	"github.com/Wu-jiyan/one-search-api/internal/extract"
+	"github.com/Wu-jiyan/one-search-api/internal/fetchguard"
+	"github.com/Wu-jiyan/one-search-api/internal/httpx"
+	"github.com/Wu-jiyan/one-search-api/internal/obs"
 )
 
 // maxContentRunes bounds the Markdown returned to clients. The reference API

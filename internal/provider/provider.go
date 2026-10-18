@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wujiyan/one-search-api/internal/config"
-	"github.com/wujiyan/one-search-api/internal/query"
+	"github.com/Wu-jiyan/one-search-api/internal/config"
+	"github.com/Wu-jiyan/one-search-api/internal/query"
 )
 
 // debugSearch is a test hook used by live tests to trace upstream responses.

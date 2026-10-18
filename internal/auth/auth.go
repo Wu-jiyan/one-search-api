@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wujiyan/one-search-api/internal/config"
-	"github.com/wujiyan/one-search-api/internal/httpx"
-	"github.com/wujiyan/one-search-api/internal/limit"
+	"github.com/Wu-jiyan/one-search-api/internal/config"
+	"github.com/Wu-jiyan/one-search-api/internal/httpx"
+	"github.com/Wu-jiyan/one-search-api/internal/limit"
 )
 
 // Key is a configured API key with its live quota state.

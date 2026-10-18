@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wujiyan/one-search-api/internal/config"
-	"github.com/wujiyan/one-search-api/internal/httpx"
-	"github.com/wujiyan/one-search-api/internal/obs"
+	"github.com/Wu-jiyan/one-search-api/internal/config"
+	"github.com/Wu-jiyan/one-search-api/internal/httpx"
+	"github.com/Wu-jiyan/one-search-api/internal/obs"
 )
 
 const testPage = `<!DOCTYPE html><html><head><title>测试页面</title>

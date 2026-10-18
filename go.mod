@@ -1,4 +1,4 @@
-module github.com/wujiyan/one-search-api
+module github.com/Wu-jiyan/one-search-api
 
 go 1.27.2
 
