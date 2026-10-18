@@ -310,6 +310,14 @@ func (s *bingSession) noteQuery(q string) {
 
 // searchURL builds the query string a real browser or mobile app sends.
 func (s *bingSession) searchURL(q query.Query, region string, rss bool) string {
+	return s.searchURLPage(q, region, rss, 0)
+}
+
+// searchURLPage is searchURL with explicit pagination. first is the 1-based
+// index of the first result (11 for page 2) and mirrors what Bing's own pager
+// links carry: &first=11&FORM=PERE. Note that Bing only honours this for
+// browser-like sessions; see TestLiveBingPagination.
+func (s *bingSession) searchURLPage(q query.Query, region string, rss bool, first int) string {
 	qstr := q.EngineString()
 
 	s.mu.Lock()
@@ -360,6 +368,11 @@ func (s *bingSession) searchURL(q query.Query, region string, rss bool) string {
 	}
 	for k, val := range s.extraParams {
 		v.Set(k, val)
+	}
+	if first > 1 {
+		// Same shape as the pager links Bing emits in its own HTML.
+		v.Set("first", strconv.Itoa(first))
+		v.Set("FORM", "PERE")
 	}
 	if rss {
 		v.Set("format", "rss")

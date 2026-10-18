@@ -171,8 +171,8 @@ auth:
 | type | 需要 Key | 说明 |
 |---|---|---|
 | `searxng` | 否（可选 token） | **推荐主源**；需在 SearXNG `settings.yml` 的 `search.formats` 中加 `json`；支持 `pageno` 翻页，`count>20` 靠它和 Brave 补满 |
-| `bingrss` | 否 | Bing 国内/国际版 RSS；约 5 KB，`date` 字段最全，**默认渠道**；空 channel 自动重试，失败回退 HTML；每页固定 10 条 |
-| `binghtml` | 否 | Bing 国内/国际版 HTML；约 100 KB，摘要结构更全 |
+| `bingrss` | 否 | Bing 国内/国际版 RSS；约 5 KB，`date` 字段最全，**默认渠道**；空 channel 自动重试，失败回退 HTML；每页固定 10 条，`count>10` 时自动尝试 `&first=` 翻页（无新增即停） |
+| `binghtml` | 否 | Bing 国内/国际版 HTML；约 100 KB，摘要结构更全；同样支持自适应 `&first=` 翻页 |
 | `duckduckgo` | 否 | 解析 HTML；可能触发人机验证；**中国大陆网络通常不可达** |
 | `brave` | 是 | 免费 2000 次/月，质量好 |
 | `tavily` | 是 | 免费 1000 次/月，自带摘要能力 |

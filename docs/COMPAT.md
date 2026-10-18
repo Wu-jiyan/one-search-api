@@ -152,7 +152,7 @@
 | 2 | `after:` / `before:` 为结果后置过滤 | 无索引级时间过滤 |
 | 3 | `localization` 不生效 | 无 GeoIP |
 | 4 | `ori_question` 不参与排序 | v1 无 LLM 富化 |
-| 5 | `count>10` 且只启用 Bing 时最多 10 条 | Bing RSS/HTML 每页固定 10 条且不认翻页参数；SearXNG 与 Brave 已实现分页（pageno/offset），默认部署（含 SearXNG）可拿满 count |
+| 5 | `count>10` 在纯 Bing 部署下通常仍只有 10 条 | Bing 每页固定 10 条。实测：`cn.bing.com` **忽略** `first=11`（返回第 1 页副本），本实现发现「零新增」即停止，只多花 1 次请求；`www.bing.com` 在**机房 IP** 上被风控投喂无关结果（HK VPS 实测返回 microservices/大象等完全无关内容），翻页虽生效但数据不可信。SearXNG（`pageno`）与 Brave（`offset`）分页可靠，多源部署可填满 `count` |
 | 6 | `count: null` 等类型边界更宽松 | 正常客户端不受影响 |
 | 7 | 乱码查询可能返回空数组 | 有离题结果过滤；官方返回 10 条低分结果 |
 | 8 | `site_icon` 用自有模板 | 不依赖官方 CDN；可配置成 `https://cdn.deepseek.com/site-icons/{host}` |

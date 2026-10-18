@@ -31,15 +31,19 @@ func (b *bingHTML) Type() string { return "binghtml" }
 func (b *bingHTML) Warm(ctx context.Context) { b.sess.Warm(ctx) }
 
 // Search retries once with a rotated browser identity when Bing serves a bot
-// challenge page instead of results.
+// challenge page instead of results, then pages through &first= while the
+// endpoint keeps yielding new URLs.
 func (b *bingHTML) Search(ctx context.Context, q query.Query) ([]Result, error) {
 	var lastErr error
 	var lastResults []Result
+	more := func(first int) ([]Result, error) {
+		return bingHTMLResultsPage(ctx, b.sess, q, b.name, first)
+	}
 	for attempt := 0; attempt < 2; attempt++ {
 		res, err := bingHTMLResults(ctx, b.sess, q, b.name)
 		if err == nil {
 			if len(res) == 0 || !suspiciousResults(res, q) {
-				return res, nil
+				return paginateBing(ctx, q, res, more), nil
 			}
 			lastResults = res
 			debugf("binghtml attempt=%d results=%d look off-topic, retrying", attempt+1, len(res))
@@ -55,6 +59,8 @@ func (b *bingHTML) Search(ctx context.Context, q query.Query) ([]Result, error) 
 		}
 	}
 	if len(lastResults) > 0 {
+		// These results already failed the relevance check; paging through more
+		// of the same degraded response would only amplify junk.
 		return lastResults, nil
 	}
 	return nil, lastErr
@@ -62,7 +68,13 @@ func (b *bingHTML) Search(ctx context.Context, q query.Query) ([]Result, error) 
 
 // bingHTMLResults fetches and parses one Bing HTML results page.
 func bingHTMLResults(ctx context.Context, sess *bingSession, q query.Query, engine string) ([]Result, error) {
-	target := sess.searchURL(q, "", false)
+	return bingHTMLResultsPage(ctx, sess, q, engine, 0)
+}
+
+// bingHTMLResultsPage fetches one HTML page at the given &first= offset (0 for
+// the first page).
+func bingHTMLResultsPage(ctx context.Context, sess *bingSession, q query.Query, engine string, first int) ([]Result, error) {
+	target := sess.searchURLPage(q, "", false, first)
 	resp, err := sess.get(ctx, target, "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8")
 	if err != nil {
 		return nil, fmt.Errorf("binghtml: %w", err)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -384,4 +385,68 @@ func TestBravePagination(t *testing.T) {
 	if len(offsets) != 2 || offsets[1] == "" {
 		t.Errorf("offsets = %v, want a second paged request", offsets)
 	}
+}
+
+// TestPaginateBing locks the adaptive paging loop: it keeps fetching while new
+// URLs appear, stops as soon as a page repeats, and never exceeds the cap.
+func TestPaginateBing(t *testing.T) {
+	q := mustQ(t, "golang context")
+	q.Count = 50
+
+	mk := func(prefix string, n int) []Result {
+		out := make([]Result, 0, n)
+		for i := 0; i < n; i++ {
+			out = append(out, Result{URL: "https://example.com/" + prefix + strconv.Itoa(i), Title: prefix, Rank: i + 1})
+		}
+		return out
+	}
+
+	t.Run("fills while new urls appear", func(t *testing.T) {
+		calls := 0
+		fetch := func(first int) ([]Result, error) {
+			calls++
+			return mk("p"+strconv.Itoa(first)+"-", 10), nil
+		}
+		got := paginateBing(context.Background(), q, mk("base-", 10), fetch)
+		if len(got) != 50 {
+			t.Errorf("results = %d, want 50", len(got))
+		}
+		if calls != 4 {
+			t.Errorf("page fetches = %d, want 4", calls)
+		}
+		for i, r := range got {
+			if r.Rank != i+1 {
+				t.Errorf("rank[%d] = %d", i, r.Rank)
+			}
+		}
+	})
+
+	t.Run("stops on repeated page", func(t *testing.T) {
+		calls := 0
+		same := mk("same-", 10)
+		fetch := func(first int) ([]Result, error) {
+			calls++
+			return same, nil
+		}
+		got := paginateBing(context.Background(), q, same, fetch)
+		if len(got) != 10 {
+			t.Errorf("results = %d, want 10", len(got))
+		}
+		if calls != 1 {
+			t.Errorf("page fetches = %d, want 1 (stop after the duplicate)", calls)
+		}
+	})
+
+	t.Run("no pagination when count is satisfied", func(t *testing.T) {
+		calls := 0
+		q3 := q
+		q3.Count = 10
+		got := paginateBing(context.Background(), q3, mk("x-", 10), func(int) ([]Result, error) {
+			calls++
+			return nil, nil
+		})
+		if len(got) != 10 || calls != 0 {
+			t.Errorf("results=%d calls=%d, want 10/0", len(got), calls)
+		}
+	})
 }

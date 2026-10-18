@@ -190,7 +190,7 @@ Bing 两个渠道额外共享一套 `bingSession`（§4.1）：首页预热 cook
 | type | 端点 | 鉴权 | 产出 | 备注 |
 |---|---|---|---|---|
 | `searxng` | `GET {base}/search?format=json` | 可选 `X-Token` | title/url/content/publishedDate/score/favicon | 需在 SearXNG settings.yml 开启 `json` 格式；按 `pageno` 翻页（最多 5 页） |
-| `bingrss` | `GET {base}/search?…&format=rss` | 无 | title/link/description/pubDate | 约 5KB，date 最全；空 channel 重试 + HTML 回退；默认渠道；RSS 每页固定 10 条且不认翻页 |
+| `bingrss` | `GET {base}/search?…&format=rss` | 无 | title/link/description/pubDate | 约 5KB，date 最全；空 channel 重试 + HTML 回退；默认渠道；每页 10 条，`count>10` 时自适应 `&first=` 翻页 |
 | `binghtml` | `GET {base}/search?…` | 无 | `li.b_algo` 的 title/url/caption/news_dt | 约 100KB，摘要结构更全；被挑战时轮换指纹重试 |
 | `duckduckgo` | `POST {base}/html/` | 无 | title/url/snippet | 解析 `result__a` / `result__snippet`；易触发验证码，默认权重低 |
 | `brave` | `GET https://api.search.brave.com/res/v1/web/search` | `X-Subscription-Token` | title/url/description/age/page_age | 免费 2000 次/月，需自备 key |

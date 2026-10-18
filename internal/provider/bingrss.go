@@ -42,6 +42,7 @@ type rssDocument struct {
 func (b *bingRSS) Search(ctx context.Context, q query.Query) ([]Result, error) {
 	var lastErr error
 	var lastResults []Result
+	more := func(first int) ([]Result, error) { return b.oncePage(ctx, q, first) }
 	for attempt := 0; attempt < 2; attempt++ {
 		res, err := b.once(ctx, q)
 		if err != nil {
@@ -49,7 +50,7 @@ func (b *bingRSS) Search(ctx context.Context, q query.Query) ([]Result, error) {
 		} else if len(res) > 0 {
 			lastResults = res
 			if !suspiciousResults(res, q) {
-				return res, nil
+				return paginateBing(ctx, q, res, more), nil
 			}
 			debugf("bingrss attempt=%d results=%d look off-topic, retrying", attempt+1, len(res))
 		}
@@ -67,7 +68,11 @@ func (b *bingRSS) Search(ctx context.Context, q query.Query) ([]Result, error) {
 	if herr == nil && len(res) > 0 {
 		if !suspiciousResults(res, q) {
 			debugf("bingrss recovered %d results via HTML fallback", len(res))
-			return res, nil
+			// The fallback renderer can paginate even when the RSS feed is
+			// soft-blocked, so keep filling the requested count.
+			return paginateBing(ctx, q, res, func(first int) ([]Result, error) {
+				return bingHTMLResultsPage(ctx, b.sess, q, b.name, first)
+			}), nil
 		}
 		if len(lastResults) == 0 {
 			lastResults = res
@@ -89,7 +94,13 @@ func (b *bingRSS) Search(ctx context.Context, q query.Query) ([]Result, error) {
 }
 
 func (b *bingRSS) once(ctx context.Context, q query.Query) ([]Result, error) {
-	target := b.sess.searchURL(q, "", true)
+	return b.oncePage(ctx, q, 0)
+}
+
+// oncePage fetches one RSS page at the given &first= offset (0 for the first
+// page).
+func (b *bingRSS) oncePage(ctx context.Context, q query.Query, first int) ([]Result, error) {
+	target := b.sess.searchURLPage(q, "", true, first)
 	resp, err := b.sess.get(ctx, target, "application/rss+xml, application/xml;q=0.9, */*;q=0.1")
 	if err != nil {
 		return nil, fmt.Errorf("bingrss: %w", err)
@@ -114,6 +125,11 @@ func (b *bingRSS) once(ctx context.Context, q query.Query) ([]Result, error) {
 	b.sess.noteQuery(q.EngineString())
 	debugf("bingrss url=%q bytes=%d structItems=%d", target, len(body), len(doc.Channel.Items))
 
+	return rssResults(&doc, q, b.name), nil
+}
+
+// rssResults converts decoded RSS items into provider results.
+func rssResults(doc *rssDocument, q query.Query, engine string) []Result {
 	out := make([]Result, 0, len(doc.Channel.Items))
 	for _, item := range doc.Channel.Items {
 		u, canon := NormalizeURL(item.Link)
@@ -129,11 +145,11 @@ func (b *bingRSS) once(ctx context.Context, q query.Query) ([]Result, error) {
 			URL:     canon,
 			Snippet: cleanText(item.Description),
 			Date:    ParseDate(item.PubDate),
-			Engine:  b.name,
+			Engine:  engine,
 			Rank:    len(out) + 1,
 		})
 	}
-	return out, nil
+	return out
 }
 
 func trimSpaceBytes(b []byte) string {
