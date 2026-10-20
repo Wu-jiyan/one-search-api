@@ -18,6 +18,7 @@ import (
 	"github.com/Wu-jiyan/one-search-api/internal/extract"
 	"github.com/Wu-jiyan/one-search-api/internal/fetchguard"
 	"github.com/Wu-jiyan/one-search-api/internal/httpx"
+	"github.com/Wu-jiyan/one-search-api/internal/limit"
 	"github.com/Wu-jiyan/one-search-api/internal/obs"
 )
 
@@ -35,11 +36,16 @@ type Service struct {
 	flight    *cache.Group[*extract.Page]
 	metrics   *obs.Metrics
 	userAgent string
+
+	// sem bounds the upstream fetches running at the same time.
+	sem *limit.Semaphore
+	// budget caps the total upstream bytes pulled per day.
+	budget *byteBudget
 }
 
 // New builds a fetch service.
 func New(cfg *config.Config, metrics *obs.Metrics) *Service {
-	guard := fetchguard.New(cfg.Fetch.AllowPrivate, cfg.Fetch.AllowPorts, cfg.Fetch.MaxRedirects)
+	guard := fetchguard.New(cfg.Fetch.AllowPrivate, cfg.Fetch.AllowPorts, cfg.Fetch.MaxRedirects, cfg.Fetch.IPVersion)
 	return &Service{
 		cfg:       cfg.Fetch,
 		guard:     guard,
@@ -48,6 +54,8 @@ func New(cfg *config.Config, metrics *obs.Metrics) *Service {
 		flight:    &cache.Group[*extract.Page]{},
 		metrics:   metrics,
 		userAgent: cfg.Fetch.UserAgent,
+		sem:       limit.NewSemaphore(cfg.Fetch.MaxConcurrency),
+		budget:    newByteBudget(cfg.Fetch.ServerDailyBytes),
 	}
 }
 
@@ -84,9 +92,10 @@ func MapError(err error) *httpx.APIError {
 	}
 }
 
-// Fetch returns title and Markdown content for a URL.
-func (s *Service) Fetch(ctx context.Context, rawURL string) (*httpx.FetchResponse, error) {
-	page, err := s.Page(ctx, rawURL)
+// Fetch returns title and Markdown content for a URL. The meter accounts the
+// upstream traffic; a nil meter disables per-caller accounting.
+func (s *Service) Fetch(ctx context.Context, meter Meter, rawURL string) (*httpx.FetchResponse, error) {
+	page, err := s.Page(ctx, meter, rawURL)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +110,7 @@ func (s *Service) Fetch(ctx context.Context, rawURL string) (*httpx.FetchRespons
 }
 
 // Page fetches and caches the extracted page.
-func (s *Service) Page(ctx context.Context, rawURL string) (*extract.Page, error) {
+func (s *Service) Page(ctx context.Context, meter Meter, rawURL string) (*extract.Page, error) {
 	u, err := s.guard.ValidateURL(rawURL)
 	if err != nil {
 		return nil, mapGuardError(err)
@@ -114,7 +123,7 @@ func (s *Service) Page(ctx context.Context, rawURL string) (*extract.Page, error
 	}
 
 	page, err := cache.Do(s.flight, key, func() (*extract.Page, error) {
-		p, ferr := s.fetchOnce(ctx, u)
+		p, ferr := s.fetchOnce(ctx, meter, u)
 		if ferr != nil {
 			return nil, ferr
 		}
@@ -127,9 +136,58 @@ func (s *Service) Page(ctx context.Context, rawURL string) (*extract.Page, error
 	return page, nil
 }
 
-func (s *Service) fetchOnce(ctx context.Context, u *url.URL) (*extract.Page, error) {
+// fetchOnce performs one upstream fetch under the concurrency, per-key and
+// byte-budget guards, and charges the traffic it produced.
+func (s *Service) fetchOnce(ctx context.Context, meter Meter, u *url.URL) (*extract.Page, error) {
+	if !s.sem.TryAcquire() {
+		s.metrics.Inc("onesearch_fetch_total", "status", "busy")
+		s.metrics.Inc("onesearch_fetch_quota_rejected_total", "reason", "concurrency")
+		return nil, httpx.RateLimited("too many concurrent upstream fetches", time.Second)
+	}
+	defer s.sem.Release()
+
+	if meter != nil {
+		if !meter.AcquireFetch() {
+			s.metrics.Inc("onesearch_fetch_quota_rejected_total", "reason", "key_concurrency")
+			return nil, httpx.RateLimited("too many concurrent fetches for this api key", time.Second)
+		}
+		defer meter.ReleaseFetch()
+	}
+
+	// Reserve the byte budget before the transfer: an exhausted budget must
+	// stop the request instead of paying for it.
+	maxBytes := s.cfg.MaxBytes
+	var keyReserved, srvReserved int64
+	if meter != nil {
+		r, aerr := meter.ReserveFetch(maxBytes)
+		if aerr != nil {
+			s.metrics.Inc("onesearch_fetch_quota_rejected_total", "reason", "key_quota")
+			return nil, aerr
+		}
+		keyReserved = r
+	}
+	srvReserved, aerr := s.budget.reserve(maxBytes)
+	if aerr != nil {
+		if meter != nil {
+			meter.CommitFetch(keyReserved, 0)
+		}
+		s.metrics.Inc("onesearch_fetch_quota_rejected_total", "reason", "server_quota")
+		return nil, aerr
+	}
+
+	settle := func(actual int64) {
+		if meter != nil {
+			meter.CommitFetch(keyReserved, actual)
+		}
+		s.budget.commit(srvReserved, actual)
+		if actual > 0 {
+			s.metrics.Add("onesearch_fetch_bytes_total", float64(actual))
+		}
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
+		settle(0)
 		return nil, httpx.InvalidRequest("invalid url: " + err.Error())
 	}
 	req.Header.Set("User-Agent", s.userAgent)
@@ -140,22 +198,27 @@ func (s *Service) fetchOnce(ctx context.Context, u *url.URL) (*extract.Page, err
 	resp, err := s.client.Do(req)
 	s.metrics.ObserveDuration("onesearch_fetch_duration_seconds", time.Since(start))
 	if err != nil {
+		settle(0)
 		return nil, mapNetError(err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		s.metrics.Inc("onesearch_fetch_total", "status", "upstream_error")
+		settle(0)
 		return nil, httpx.NotFound("failed to fetch URL")
 	}
 	ct := resp.Header.Get("Content-Type")
 	if !allowedContentType(ct) {
 		s.metrics.Inc("onesearch_fetch_total", "status", "unsupported_type")
+		settle(0)
 		return nil, httpx.NotFound("failed to fetch URL")
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, s.cfg.MaxBytes+1))
+	read := int64(len(body))
 	if err != nil {
+		settle(read)
 		if isTimeout(err) {
 			return nil, httpx.UpstreamTimeout("Request timeout")
 		}
@@ -163,8 +226,10 @@ func (s *Service) fetchOnce(ctx context.Context, u *url.URL) (*extract.Page, err
 	}
 	if int64(len(body)) > s.cfg.MaxBytes {
 		s.metrics.Inc("onesearch_fetch_total", "status", "too_large")
+		settle(read)
 		return nil, httpx.PayloadTooLarge("page exceeds the maximum allowed size")
 	}
+	settle(read)
 
 	page, err := extract.Extract(u.String(), body, ct)
 	if err != nil {

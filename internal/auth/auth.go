@@ -20,11 +20,22 @@ type Key struct {
 	MaxResults int
 	Allowed    map[string]bool
 
-	bucket *limit.Bucket
+	// FetchDailyBytes and FetchDailyCount cap the upstream traffic this key
+	// may pull per day. Zero means unlimited.
+	FetchDailyBytes int64
+	FetchDailyCount int
+
+	bucket   *limit.Bucket
+	fetchSem *limit.Semaphore
 
 	mu   sync.Mutex
 	day  string
 	used int
+
+	fetchDay      string
+	fetchCount    int
+	fetchBytes    int64
+	fetchReserved int64
 
 	lastUse time.Time
 }
@@ -79,6 +90,70 @@ func (k *Key) rollLocked() {
 		k.day = today
 		k.used = 0
 	}
+	if k.fetchDay != today {
+		k.fetchDay = today
+		k.fetchCount = 0
+		k.fetchBytes = 0
+		k.fetchReserved = 0
+	}
+}
+
+// AcquireFetch takes one of the key's concurrent upstream-fetch slots. It
+// reports false when the key already runs at its concurrency limit.
+func (k *Key) AcquireFetch() bool { return k.fetchSem.TryAcquire() }
+
+// ReleaseFetch returns a concurrent upstream-fetch slot.
+func (k *Key) ReleaseFetch() { k.fetchSem.Release() }
+
+// ReserveFetch books up to maxBytes of the key's daily fetch budget and
+// charges one fetch against the daily fetch counter. The returned amount must
+// be handed to CommitFetch once the transferred size is known.
+func (k *Key) ReserveFetch(maxBytes int64) (int64, *httpx.APIError) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.rollLocked()
+
+	if k.FetchDailyCount > 0 && k.fetchCount >= k.FetchDailyCount {
+		return 0, httpx.QuotaExceeded("fetch quota exceeded for this api key")
+	}
+	if maxBytes < 0 {
+		maxBytes = 0
+	}
+	if k.FetchDailyBytes > 0 {
+		// The reservation is clamped to what is left of today's budget: a
+		// request may overshoot its reservation by its own size, but no new
+		// request starts once the budget is spent.
+		remaining := k.FetchDailyBytes - k.fetchBytes - k.fetchReserved
+		if remaining <= 0 {
+			return 0, httpx.QuotaExceeded("fetch traffic quota exceeded for this api key")
+		}
+		if maxBytes > remaining {
+			maxBytes = remaining
+		}
+	}
+	k.fetchReserved += maxBytes
+	k.fetchCount++
+	return maxBytes, nil
+}
+
+// CommitFetch settles a reservation: the reserved bytes are released and the
+// bytes actually transferred are charged.
+func (k *Key) CommitFetch(reserved, actual int64) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.fetchReserved -= reserved
+	if actual < 0 {
+		actual = 0
+	}
+	k.fetchBytes += actual
+}
+
+// FetchUsage reports today's fetch counters for diagnostics.
+func (k *Key) FetchUsage() (count int, bytes int64) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.rollLocked()
+	return k.fetchCount, k.fetchBytes
 }
 
 // Authenticator resolves Bearer tokens to keys and owns the anonymous
@@ -97,12 +172,16 @@ func New(cfg config.AuthConfig) *Authenticator {
 	a := &Authenticator{mode: cfg.Mode, anon: &cfg, byIP: map[string]*Key{}}
 	for _, kc := range cfg.Keys {
 		k := &Key{
-			Name:       kc.Name,
-			Hashed:     kc.HashedToken,
-			DailyQuota: kc.DailyQuota,
-			MaxResults: kc.MaxResults,
-			bucket:     limit.NewBucket(kc.RPM, kc.Burst),
-			day:        time.Now().Format("2006-01-02"),
+			Name:            kc.Name,
+			Hashed:          kc.HashedToken,
+			DailyQuota:      kc.DailyQuota,
+			MaxResults:      kc.MaxResults,
+			FetchDailyBytes: kc.FetchDailyBytes,
+			FetchDailyCount: kc.FetchDailyCount,
+			bucket:          limit.NewBucket(kc.RPM, kc.Burst),
+			fetchSem:        limit.NewSemaphore(cfg.FetchMaxConcurrency),
+			day:             time.Now().Format("2006-01-02"),
+			fetchDay:        time.Now().Format("2006-01-02"),
 		}
 		if len(kc.AllowedProviders) > 0 {
 			k.Allowed = make(map[string]bool, len(kc.AllowedProviders))
@@ -163,11 +242,15 @@ func (a *Authenticator) anonymous(ip string) *Key {
 		return k
 	}
 	k := &Key{
-		Name:       "anon:" + ip,
-		DailyQuota: a.anon.AnonymousDailyQuota,
-		MaxResults: 0,
-		bucket:     limit.NewBucket(a.anon.AnonymousRPM, 0),
-		day:        now.Format("2006-01-02"),
+		Name:            "anon:" + ip,
+		DailyQuota:      a.anon.AnonymousDailyQuota,
+		MaxResults:      0,
+		FetchDailyBytes: a.anon.AnonymousFetchDailyBytes,
+		FetchDailyCount: a.anon.AnonymousFetchDailyCount,
+		bucket:          limit.NewBucket(a.anon.AnonymousRPM, 0),
+		fetchSem:        limit.NewSemaphore(a.anon.FetchMaxConcurrency),
+		day:             now.Format("2006-01-02"),
+		fetchDay:        now.Format("2006-01-02"),
 	}
 	k.touch()
 	if len(a.byIP) > 10000 {

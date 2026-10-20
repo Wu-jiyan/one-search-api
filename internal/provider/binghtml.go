@@ -27,6 +27,9 @@ type bingHTML struct {
 func (b *bingHTML) Name() string { return b.name }
 func (b *bingHTML) Type() string { return "binghtml" }
 
+// SourceIP returns the address this provider's Bing session is bound to.
+func (b *bingHTML) SourceIP() string { return b.sess.sourceIP() }
+
 // Warm pre-warms the browser session (called at startup).
 func (b *bingHTML) Warm(ctx context.Context) { b.sess.Warm(ctx) }
 

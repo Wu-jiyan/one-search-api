@@ -60,7 +60,7 @@ func TestFetchExtractsMarkdown(t *testing.T) {
 	defer srv.Close()
 
 	svc := New(testConfig(t, 5*time.Second, srv.URL), obs.NewMetrics())
-	resp, err := svc.Fetch(context.Background(), srv.URL)
+	resp, err := svc.Fetch(context.Background(), nil, srv.URL)
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestFetchExtractsMarkdown(t *testing.T) {
 	}
 
 	// Second call must be served from cache.
-	if _, err := svc.Fetch(context.Background(), srv.URL); err != nil {
+	if _, err := svc.Fetch(context.Background(), nil, srv.URL); err != nil {
 		t.Fatalf("second Fetch: %v", err)
 	}
 	if got := atomic.LoadInt32(&hits); got != 1 {
@@ -90,7 +90,7 @@ func TestFetchBlocksSSRF(t *testing.T) {
 	cfg.Fetch.AllowPrivate = false
 	svc := New(cfg, obs.NewMetrics())
 
-	_, err := svc.Fetch(context.Background(), srv.URL)
+	_, err := svc.Fetch(context.Background(), nil, srv.URL)
 	var apiErr *httpx.APIError
 	// The reference API hides its SSRF policy behind an opaque 404.
 	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusNotFound {
@@ -105,7 +105,7 @@ func TestFetchUpstreamErrorBecomesNotFound(t *testing.T) {
 	defer srv.Close()
 
 	svc := New(testConfig(t, 5*time.Second, srv.URL), obs.NewMetrics())
-	_, err := svc.Fetch(context.Background(), srv.URL)
+	_, err := svc.Fetch(context.Background(), nil, srv.URL)
 	var apiErr *httpx.APIError
 	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusNotFound {
 		t.Fatalf("err = %v, want 404", err)
@@ -131,7 +131,7 @@ func TestFetchUnsupportedContentType(t *testing.T) {
 			defer srv.Close()
 
 			svc := New(testConfig(t, 5*time.Second, srv.URL), obs.NewMetrics())
-			_, err := svc.Fetch(context.Background(), srv.URL)
+			_, err := svc.Fetch(context.Background(), nil, srv.URL)
 			var apiErr *httpx.APIError
 			if !errors.As(err, &apiErr) || apiErr.Status != http.StatusNotFound {
 				t.Fatalf("err = %v, want 404 for %s", err, tc.contentType)
@@ -155,7 +155,7 @@ func TestFetchUnsupportedContentType(t *testing.T) {
 			defer srv.Close()
 
 			svc := New(testConfig(t, 5*time.Second, srv.URL), obs.NewMetrics())
-			got, err := svc.Fetch(context.Background(), srv.URL)
+			got, err := svc.Fetch(context.Background(), nil, srv.URL)
 			if err != nil {
 				t.Fatalf("fetch %s: %v", tc.contentType, err)
 			}
@@ -177,7 +177,7 @@ func TestFetchTooLarge(t *testing.T) {
 	cfg.Fetch.MaxBytes = 256
 	svc := New(cfg, obs.NewMetrics())
 
-	_, err := svc.Fetch(context.Background(), srv.URL)
+	_, err := svc.Fetch(context.Background(), nil, srv.URL)
 	var apiErr *httpx.APIError
 	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusRequestEntityTooLarge {
 		t.Fatalf("err = %v, want 413", err)
@@ -192,7 +192,7 @@ func TestFetchTimeout(t *testing.T) {
 	defer srv.Close()
 
 	svc := New(testConfig(t, 60*time.Millisecond, srv.URL), obs.NewMetrics())
-	_, err := svc.Fetch(context.Background(), srv.URL)
+	_, err := svc.Fetch(context.Background(), nil, srv.URL)
 	var apiErr *httpx.APIError
 	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusGatewayTimeout {
 		t.Fatalf("err = %v, want 504", err)
@@ -207,7 +207,7 @@ func TestFetchNoContent(t *testing.T) {
 	defer srv.Close()
 
 	svc := New(testConfig(t, 5*time.Second, srv.URL), obs.NewMetrics())
-	_, err := svc.Fetch(context.Background(), srv.URL)
+	_, err := svc.Fetch(context.Background(), nil, srv.URL)
 	var apiErr *httpx.APIError
 	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusNotFound {
 		t.Fatalf("err = %v, want 404", err)

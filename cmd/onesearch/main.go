@@ -60,6 +60,14 @@ func main() {
 		if timeout <= 0 {
 			timeout = cfg.Search.ProviderTimeout.D()
 		}
+		attrs := []any{"provider", pc.Name, "type", pc.Type}
+		if pool, perr := provider.ExpandSourcePool(pc.SourceIPPool); perr == nil && len(pool) > 0 {
+			attrs = append(attrs, "source_ips", len(pool))
+		}
+		if si, ok := prov.(provider.SourceIPInfo); ok {
+			attrs = append(attrs, "source_ip", si.SourceIP())
+		}
+		logger.Info("provider registered", attrs...)
 		sources = append(sources, &search.Source{
 			Name:    pc.Name,
 			Type:    pc.Type,

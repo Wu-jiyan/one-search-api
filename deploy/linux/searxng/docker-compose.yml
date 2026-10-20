@@ -1,0 +1,13 @@
+name: onesearch-searxng
+
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: onesearch-searxng
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:18800:8080"
+    volumes:
+      - ./settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      - SEARXNG_BASE_URL=http://127.0.0.1:18800/

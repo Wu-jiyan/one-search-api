@@ -108,7 +108,7 @@ func TestSearchBasic(t *testing.T) {
 	}}
 	svc := newTestService(t, f, nil)
 
-	res, err := svc.Search(context.Background(), mustQ(t, "deepseek"), 10, false, nil)
+	res, err := svc.Search(context.Background(), mustQ(t, "deepseek"), 10, false, nil, nil)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -159,10 +159,10 @@ func TestSearchCache(t *testing.T) {
 	svc := newTestService(t, f, nil)
 	q := mustQ(t, "cache-test")
 
-	if _, err := svc.Search(context.Background(), q, 5, false, nil); err != nil {
+	if _, err := svc.Search(context.Background(), q, 5, false, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Search(context.Background(), q, 5, false, nil); err != nil {
+	if _, err := svc.Search(context.Background(), q, 5, false, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.callCount(); got != 1 {
@@ -186,7 +186,7 @@ func TestSearchNeedContent(t *testing.T) {
 		c.Fetch.AllowPorts = []int{port}
 	})
 
-	res, err := svc.Search(context.Background(), mustQ(t, "content-test"), 5, true, nil)
+	res, err := svc.Search(context.Background(), mustQ(t, "content-test"), 5, true, nil, nil)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestSearchProviderTimeoutDegrades(t *testing.T) {
 	})
 
 	start := time.Now()
-	res, err := svc.Search(context.Background(), mustQ(t, "timeout-test"), 5, false, nil)
+	res, err := svc.Search(context.Background(), mustQ(t, "timeout-test"), 5, false, nil, nil)
 	if err != nil {
 		t.Fatalf("Search should degrade, got error: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestSearchAllowedProviders(t *testing.T) {
 		{Title: "A", URL: "https://example.com/a", Engine: "fake", Rank: 1},
 	}}
 	svc := newTestService(t, f, nil)
-	res, err := svc.Search(context.Background(), mustQ(t, "allow-test"), 5, false, map[string]bool{"other": true})
+	res, err := svc.Search(context.Background(), mustQ(t, "allow-test"), 5, false, map[string]bool{"other": true}, nil)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestSearchCountClamp(t *testing.T) {
 		{Title: "B", URL: "https://example.com/b", Engine: "fake", Rank: 2},
 	}}
 	svc := newTestService(t, f, func(c *config.Config) { c.Search.MaxCount = 1 })
-	res, err := svc.Search(context.Background(), mustQ(t, "clamp-test"), 10, false, nil)
+	res, err := svc.Search(context.Background(), mustQ(t, "clamp-test"), 10, false, nil, nil)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}

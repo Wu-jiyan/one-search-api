@@ -413,19 +413,31 @@ func TestSessionRotationChangesIdentity(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(time.Second, "x")
+	out, err := NewOutbound("", nil)
+	if err != nil {
+		t.Fatalf("NewOutbound: %v", err)
+	}
 	sess := newBingSession(config.ProviderConfig{
-		Name: "bing", BaseURL: srv.URL, Market: "zh-CN",
-	}, client, "")
+		Name: "bing", BaseURL: srv.URL, Market: "zh-CN", Timeout: config.Duration(time.Second),
+	}, out, "")
 
 	first := sess.currentFP()
 	firstCVID := sess.cvid
 	sess.invalidate()
 	second := sess.currentFP()
-	if first.UA == second.UA && first.SecCHUA == second.SecCHUA {
-		t.Error("fingerprint did not rotate")
-	}
 	if firstCVID == sess.cvid {
 		t.Error("cvid did not rotate")
+	}
+	// The fingerprint is randomly generated, so two rotations may coincide by
+	// chance; allow a few attempts before calling it a failure.
+	if first.UA == second.UA && first.SecCHUA == second.SecCHUA {
+		for i := 0; i < 5; i++ {
+			sess.invalidate()
+			second = sess.currentFP()
+			if first.UA != second.UA || first.SecCHUA != second.SecCHUA {
+				return
+			}
+		}
+		t.Error("fingerprint did not rotate")
 	}
 }

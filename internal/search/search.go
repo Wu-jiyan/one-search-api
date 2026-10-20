@@ -92,7 +92,7 @@ func (s *Service) providerNames(allowed map[string]bool) string {
 }
 
 // Search runs the full pipeline and returns at most count results.
-func (s *Service) Search(ctx context.Context, q query.Query, count int, needContent bool, allowed map[string]bool) ([]httpx.SearchResult, error) {
+func (s *Service) Search(ctx context.Context, q query.Query, count int, needContent bool, allowed map[string]bool, meter fetchsvc.Meter) ([]httpx.SearchResult, error) {
 	if count <= 0 {
 		count = s.cfg.DefaultCount
 	}
@@ -110,7 +110,7 @@ func (s *Service) Search(ctx context.Context, q query.Query, count int, needCont
 	}
 
 	results, err := cache.Do(s.flight, key, func() ([]httpx.SearchResult, error) {
-		return s.run(ctx, q, count, needContent, allowed)
+		return s.run(ctx, q, count, needContent, allowed, meter)
 	})
 	if err != nil {
 		return nil, err
@@ -122,7 +122,7 @@ func (s *Service) Search(ctx context.Context, q query.Query, count int, needCont
 	return results, nil
 }
 
-func (s *Service) run(ctx context.Context, q query.Query, count int, needContent bool, allowed map[string]bool) ([]httpx.SearchResult, error) {
+func (s *Service) run(ctx context.Context, q query.Query, count int, needContent bool, allowed map[string]bool, meter fetchsvc.Meter) ([]httpx.SearchResult, error) {
 	runCtx, cancel := context.WithTimeout(ctx, s.cfg.OverallTimeout.D())
 	defer cancel()
 
@@ -147,7 +147,7 @@ func (s *Service) run(ctx context.Context, q query.Query, count int, needContent
 		items = items[:count]
 	}
 
-	pages := s.fetchContents(ctx, items, needContent)
+	pages := s.fetchContents(ctx, items, needContent, meter)
 
 	out := make([]httpx.SearchResult, 0, len(items))
 	for i, it := range items {
@@ -388,7 +388,7 @@ func (s *Service) fanOut(ctx context.Context, q query.Query, count int, allowed 
 
 // fetchContents fetches page bodies for the first need_content_max_results
 // items when need_content is set. Failed fetches simply leave nil.
-func (s *Service) fetchContents(ctx context.Context, items []rank.Item, needContent bool) []*extract.Page {
+func (s *Service) fetchContents(ctx context.Context, items []rank.Item, needContent bool, meter fetchsvc.Meter) []*extract.Page {
 	pages := make([]*extract.Page, len(items))
 	if !needContent || s.fetch == nil {
 		return pages
@@ -414,7 +414,7 @@ func (s *Service) fetchContents(ctx context.Context, items []rank.Item, needCont
 			defer s.contentSem.Release()
 			fctx, cancel := context.WithTimeout(ctx, s.cfg.ContentFetchTimeout.D())
 			defer cancel()
-			page, err := s.fetch.Page(fctx, items[i].URL)
+			page, err := s.fetch.Page(fctx, meter, items[i].URL)
 			if err != nil {
 				s.metrics.Inc("onesearch_content_fetch_total", "result", "error")
 				return

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strings"
@@ -66,8 +67,15 @@ type ServerConfig struct {
 type AuthConfig struct {
 	Mode string `yaml:"mode"` // "key" | "none"
 	// AnonymousRPM and AnonymousDailyQuota apply when Mode == "none".
-	AnonymousRPM        int         `yaml:"anonymous_rpm"`
-	AnonymousDailyQuota int         `yaml:"anonymous_daily_quota"`
+	AnonymousRPM        int `yaml:"anonymous_rpm"`
+	AnonymousDailyQuota int `yaml:"anonymous_daily_quota"`
+	// AnonymousFetchDailyBytes and AnonymousFetchDailyCount cap the upstream
+	// traffic one anonymous client may pull per day. 0 means unlimited.
+	AnonymousFetchDailyBytes int64 `yaml:"anonymous_fetch_daily_bytes"`
+	AnonymousFetchDailyCount int   `yaml:"anonymous_fetch_daily_count"`
+	// FetchMaxConcurrency caps how many upstream fetches one key may run at
+	// the same time.
+	FetchMaxConcurrency int         `yaml:"fetch_max_concurrency"`
 	Keys                []KeyConfig `yaml:"keys"`
 }
 
@@ -80,6 +88,10 @@ type KeyConfig struct {
 	DailyQuota       int      `yaml:"daily_quota"` // 0 = unlimited
 	MaxResults       int      `yaml:"max_results"` // 0 = server default
 	AllowedProviders []string `yaml:"allowed_providers"`
+	// FetchDailyBytes caps the upstream bytes this key may pull per day
+	// (0 = unlimited). FetchDailyCount caps the number of upstream fetches.
+	FetchDailyBytes int64 `yaml:"fetch_daily_bytes"`
+	FetchDailyCount int   `yaml:"fetch_daily_count"`
 	// HashedToken is filled during normalization; Token is cleared.
 	HashedToken string `yaml:"-"`
 }
@@ -112,6 +124,15 @@ type FetchConfig struct {
 	UserAgent       string   `yaml:"user_agent"`
 	CacheTTL        Duration `yaml:"cache_ttl"`
 	MinContentRunes int      `yaml:"min_content_runes"`
+
+	// MaxConcurrency caps concurrent upstream fetches across all keys.
+	MaxConcurrency int `yaml:"max_concurrency"`
+	// ServerDailyBytes caps the total upstream bytes pulled per day across
+	// all keys (0 = unlimited).
+	ServerDailyBytes int64 `yaml:"server_daily_bytes"`
+	// IPVersion selects the address family used for upstream fetches:
+	// "4", "6", or empty for any.
+	IPVersion string `yaml:"ip_version"`
 }
 
 // ProviderConfig is one upstream search source.
@@ -143,6 +164,14 @@ type ProviderConfig struct {
 	Mobile bool   `yaml:"mobile"`
 	// ExtraParams are appended verbatim to every search URL.
 	ExtraParams map[string]string `yaml:"extra_params"`
+
+	// SourceIPPool lists source addresses to bind this provider's outgoing
+	// connections to. The literal "auto" expands to the host's global
+	// unicast addresses. Every distinct source address is a distinct client
+	// for upstream per-IP rate limiting.
+	SourceIPPool []string `yaml:"source_ip_pool"`
+	// Proxy routes this provider's upstream calls through an HTTP proxy.
+	Proxy string `yaml:"proxy"`
 }
 
 // IsEnabled reports whether the provider should be registered.
@@ -184,6 +213,7 @@ func Default() *Config {
 			Mode:                "none",
 			AnonymousRPM:        60,
 			AnonymousDailyQuota: 0,
+			FetchMaxConcurrency: 4,
 		},
 		Search: SearchConfig{
 			DefaultCount:            10,
@@ -207,6 +237,7 @@ func Default() *Config {
 			UserAgent:       "Mozilla/5.0 (compatible; OneSearchAPI/1.0; +https://github.com/Wu-jiyan/one-search-api)",
 			CacheTTL:        Duration(30 * time.Minute),
 			MinContentRunes: 120,
+			MaxConcurrency:  32,
 		},
 		Providers: []ProviderConfig{
 			{Name: "bing", Type: "bingrss", Enabled: &yes, Weight: 0.9, Timeout: Duration(6 * time.Second), BaseURL: "https://cn.bing.com", Market: "zh-CN"},
@@ -407,6 +438,18 @@ func (c *Config) Normalize() error {
 	if c.Fetch.MinContentRunes <= 0 {
 		c.Fetch.MinContentRunes = 120
 	}
+	if c.Fetch.MaxConcurrency <= 0 {
+		c.Fetch.MaxConcurrency = 32
+	}
+	if c.Fetch.ServerDailyBytes < 0 {
+		c.Fetch.ServerDailyBytes = 0
+	}
+	c.Fetch.IPVersion = strings.ToLower(strings.TrimSpace(c.Fetch.IPVersion))
+	switch c.Fetch.IPVersion {
+	case "", "4", "6":
+	default:
+		return fmt.Errorf("fetch.ip_version must be 4, 6 or empty, got %q", c.Fetch.IPVersion)
+	}
 	if c.Cache.SearchMaxEntries <= 0 {
 		c.Cache.SearchMaxEntries = 512
 	}
@@ -479,6 +522,38 @@ func (c *Config) Normalize() error {
 				return fmt.Errorf("provider %q: invalid referer %q", p.Name, p.Referer)
 			}
 		}
+		p.Proxy = strings.TrimSpace(p.Proxy)
+		if p.Proxy != "" {
+			if u, err := url.Parse(p.Proxy); err != nil || u.Host == "" {
+				return fmt.Errorf("provider %q: invalid proxy %q", p.Name, p.Proxy)
+			}
+		}
+		pool := make([]string, 0, len(p.SourceIPPool))
+		seenIP := map[string]bool{}
+		for _, raw := range p.SourceIPPool {
+			raw = strings.TrimSpace(raw)
+			if raw == "" {
+				continue
+			}
+			if strings.EqualFold(raw, "auto") {
+				if !seenIP["auto"] {
+					seenIP["auto"] = true
+					pool = append(pool, "auto")
+				}
+				continue
+			}
+			ip := net.ParseIP(raw)
+			if ip == nil {
+				return fmt.Errorf("provider %q: invalid source_ip_pool entry %q", p.Name, raw)
+			}
+			v := ip.String()
+			if seenIP[v] {
+				continue
+			}
+			seenIP[v] = true
+			pool = append(pool, v)
+		}
+		p.SourceIPPool = pool
 	}
 
 	// Key normalization: hash tokens, apply defaults.
@@ -517,6 +592,24 @@ func (c *Config) Normalize() error {
 	if c.Auth.AnonymousRPM <= 0 {
 		c.Auth.AnonymousRPM = 60
 	}
+	if c.Auth.FetchMaxConcurrency <= 0 {
+		c.Auth.FetchMaxConcurrency = 4
+	}
+	if c.Auth.AnonymousFetchDailyBytes < 0 {
+		c.Auth.AnonymousFetchDailyBytes = 0
+	}
+	if c.Auth.AnonymousFetchDailyCount < 0 {
+		c.Auth.AnonymousFetchDailyCount = 0
+	}
+	for i := range c.Auth.Keys {
+		k := &c.Auth.Keys[i]
+		if k.FetchDailyBytes < 0 {
+			k.FetchDailyBytes = 0
+		}
+		if k.FetchDailyCount < 0 {
+			k.FetchDailyCount = 0
+		}
+	}
 	return nil
 }
 
@@ -546,6 +639,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Server.MaxBodyBytes > 16<<20 {
 		return fmt.Errorf("server.max_body_bytes must be <= 16MiB")
+	}
+	if c.Auth.FetchMaxConcurrency < 0 {
+		return fmt.Errorf("auth.fetch_max_concurrency must be >= 0")
 	}
 	for _, port := range c.Fetch.AllowPorts {
 		if port <= 0 || port > 65535 {

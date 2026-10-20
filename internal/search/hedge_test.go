@@ -52,7 +52,7 @@ func TestHedgeStopsWaitingForSlowProvider(t *testing.T) {
 	svc := newTestServiceMulti(t, cfg, srcs)
 
 	start := time.Now()
-	res, err := svc.Search(context.Background(), mustQ(t, "hedge-test"), 5, false, nil)
+	res, err := svc.Search(context.Background(), mustQ(t, "hedge-test"), 5, false, nil, nil)
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -80,7 +80,7 @@ func TestNoHedgeBelowThreshold(t *testing.T) {
 	svc := newTestServiceMulti(t, cfg, srcs)
 
 	start := time.Now()
-	res, err := svc.Search(context.Background(), mustQ(t, "no-hedge-test"), 10, false, nil)
+	res, err := svc.Search(context.Background(), mustQ(t, "no-hedge-test"), 10, false, nil, nil)
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("Search: %v", err)

@@ -1,0 +1,129 @@
+server:
+  addr: "127.0.0.1:18090"
+  read_header_timeout: 5s
+  request_timeout: 30s
+  shutdown_timeout: 10s
+  max_body_bytes: 1048576
+  trusted_proxies:
+    - 127.0.0.1
+    - ::1
+    - 172.16.0.0/12
+
+auth:
+  mode: key
+  anonymous_rpm: 30
+  anonymous_daily_quota: 0
+  anonymous_fetch_daily_bytes: 536870912
+  anonymous_fetch_daily_count: 2000
+  fetch_max_concurrency: 16
+  keys:
+    - name: newapi
+      token: "__KEY_NEWAPI__"
+      rpm: 240
+      burst: 40
+      daily_quota: 50000
+      max_results: 50
+      fetch_daily_bytes: 2147483648
+      fetch_daily_count: 50000
+    - name: me
+      token: "__KEY_ME__"
+      rpm: 120
+      burst: 20
+      daily_quota: 20000
+      max_results: 50
+      fetch_daily_bytes: 2147483648
+      fetch_daily_count: 20000
+
+search:
+  default_count: 10
+  max_count: 50
+  overall_timeout: 12s
+  provider_timeout: 2500ms
+  max_concurrency: 64
+  need_content_max_results: 20
+  content_fetch_timeout: 10s
+  content_fetch_concurrency: 16
+  per_domain_limit: 3
+  cache_ttl: 5m
+  hedge_delay: 800ms
+
+fetch:
+  timeout: 10s
+  max_bytes: 5242880
+  max_redirects: 15
+  allow_private: false
+  allow_ports: [80, 443, 8080, 8443]
+  user_agent: "Mozilla/5.0 (compatible; OneSearchAPI/1.0; +https://github.com/Wu-jiyan/one-search-api)"
+  cache_ttl: 30m
+  min_content_runes: 120
+  # Traffic guards: bound how much upstream traffic this service can pull.
+  max_concurrency: 32
+  max_concurrency_per_key: 4
+  server_daily_bytes: 21474836480
+  # Content fetches stay on IPv4: many sites treat datacenter IPv6 ranges
+  # as proxies and refuse the request.
+  ip_version: "4"
+
+providers:
+  # Bing international endpoint, Chinese market. Reachable directly from the
+  # US host (no 301 from cn.bing.com).
+  - name: bing-zh
+    type: bingrss
+    enabled: true
+    weight: 1.0
+    base_url: "https://www.bing.com"
+    market: "zh-CN"
+    timeout: 6s
+    rpm: 40
+    # Bind outgoing requests to the host's routed IPv6 pool so upstream sees
+    # many distinct clients.
+    source_ip_pool: ["auto"]
+
+  - name: bing-zh-html
+    type: binghtml
+    enabled: true
+    weight: 0.9
+    base_url: "https://www.bing.com"
+    market: "zh-CN"
+    timeout: 6s
+    rpm: 20
+    source_ip_pool: ["auto"]
+
+  - name: bing-intl
+    type: bingrss
+    enabled: true
+    weight: 0.9
+    base_url: "https://www.bing.com"
+    market: "en-WW"
+    timeout: 6s
+    rpm: 30
+    source_ip_pool: ["auto"]
+
+  - name: searxng
+    type: searxng
+    enabled: true
+    weight: 1.1
+    base_url: "http://127.0.0.1:18800"
+    rpm: 120
+    timeout: 4s
+
+  - name: ddg
+    type: duckduckgo
+    enabled: true
+    weight: 0.8
+    base_url: "https://html.duckduckgo.com"
+    rpm: 20
+    timeout: 4s
+    # No source_ip_pool: html.duckduckgo.com publishes no AAAA record, so an
+    # IPv6 source cannot be used for it.
+
+cache:
+  search_max_entries: 2048
+  fetch_max_entries: 2048
+  search_ttl: 5m
+  fetch_ttl: 30m
+  cleanup_interval: 1m
+
+log:
+  level: info
+  format: json

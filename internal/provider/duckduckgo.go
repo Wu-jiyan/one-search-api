@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/Wu-jiyan/one-search-api/internal/query"
@@ -17,6 +18,20 @@ type duckDuckGo struct {
 	headers map[string]string
 	region  string
 	client  *http.Client
+	// out rotates the source address between searches so one upstream
+	// identity does not carry the whole load.
+	out     *Outbound
+	timeout time.Duration
+	ua      string
+}
+
+// httpClient returns the client for this search: a source-bound client when
+// a pool is configured, otherwise the shared default client.
+func (d *duckDuckGo) httpClient() *http.Client {
+	if d.out == nil || d.out.PoolSize() == 0 {
+		return d.client
+	}
+	return d.out.CachedClient(d.out.Next(), d.timeout, d.ua)
 }
 
 func (d *duckDuckGo) Name() string { return d.name }
@@ -44,7 +59,7 @@ func (d *duckDuckGo) Search(ctx context.Context, q query.Query) ([]Result, error
 		req.Header.Set(k, v)
 	}
 
-	resp, err := d.client.Do(req.WithContext(ctx))
+	resp, err := d.httpClient().Do(req.WithContext(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("duckduckgo: %w", err)
 	}

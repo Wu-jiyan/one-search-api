@@ -30,6 +30,9 @@ import (
 	"github.com/Wu-jiyan/one-search-api/internal/search"
 )
 
+// The API key is the traffic meter for outbound fetches.
+var _ fetchsvc.Meter = (*auth.Key)(nil)
+
 type ctxKey int
 
 const (
@@ -282,7 +285,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	defer s.release()
 
-	results, err := s.search.Search(ctx, q, count, needContent, key.AllowedSet())
+	results, err := s.search.Search(ctx, q, count, needContent, key.AllowedSet(), key)
 	if err != nil {
 		s.writeError(w, err, r)
 		return
@@ -331,7 +334,7 @@ func (s *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
 	}
 	defer s.release()
 
-	page, err := s.fetch.Fetch(ctx, req.URL)
+	page, err := s.fetch.Fetch(ctx, key, req.URL)
 	if err != nil {
 		s.writeError(w, err, r)
 		return

@@ -230,6 +230,41 @@ Manual overrides: `user_agent` / `referer` / `cookies` / `mobile` / `warmup: fal
 
 ---
 
+### Outbound source-address pool (many IPv6 egresses)
+
+A provider can bind its outgoing requests to a pool of source addresses with `source_ip_pool`; the literal `"auto"` auto-detects the host's public addresses (IPv6 first). The point is to turn upstream per-IP rate limiting into per-pool limiting: on a host with a routed IPv6 prefix, dozens of IPv6 source addresses are dozens of distinct clients.
+
+```yaml
+providers:
+  - name: bing-zh
+    type: bingrss
+    base_url: "https://www.bing.com"
+    market: "zh-CN"
+    source_ip_pool: ["auto"]      # or an explicit list of IPv6 addresses
+    proxy: ""                     # optional: HTTP proxy for this provider
+```
+
+Notes:
+
+- **The Bing session is bound to its source address**: cookies, fingerprint and cvid rotate together with the address (a session invalidation or soft-block retry picks a new address and warms it up again), so a cookie jar is never reused from a different IP.
+- If the binding cannot be satisfied (IPv4-only destination, address-family mismatch) the dial falls back to the default source address, so the request still succeeds.
+- Loopback targets (a local SearXNG) are never bound.
+- Content fetches (`/v1/tools/fetch`) stay on IPv4 by default (`fetch.ip_version`): many sites treat datacenter IPv6 ranges as proxies.
+
+### Fetch traffic caps
+
+The `fetch` section and every key carry independent fetch guards, so one key cannot drain the host's bandwidth:
+
+| Setting | Effect | Response when exceeded |
+|---|---|---|
+| `auth.keys[].fetch_daily_bytes` | Upstream bytes one key may pull per day (0 = unlimited) | 402 `insufficient_quota` |
+| `auth.keys[].fetch_daily_count` | Upstream fetches one key may run per day | 402 |
+| `auth.fetch_max_concurrency` | Concurrent upstream fetches per key | 429 `rate_limit_exceeded` |
+| `fetch.max_concurrency` | Concurrent upstream fetches across all keys | 429 |
+| `fetch.server_daily_bytes` | Upstream bytes pulled per day across all keys (0 = unlimited) | 402 |
+
+The counters measure **bytes actually transferred upstream** (cache hits are free). A reservation is clamped to the remaining budget, so one request may overshoot the budget by at most its own response size, and no new fetch starts once the budget is spent. Metrics: `onesearch_fetch_bytes_total`, `onesearch_fetch_quota_rejected_total{reason}`.
+
 ## API
 
 ### `POST /v1/tools/search`

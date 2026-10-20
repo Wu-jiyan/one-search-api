@@ -31,7 +31,7 @@ func TestStaleProviderBatchDropped(t *testing.T) {
 		{Name: "good", Type: "fake", Weight: 1, Prov: good},
 		{Name: "stale", Type: "fake", Weight: 1, Prov: stale},
 	})
-	res, err := svc.Search(context.Background(), mustQ(t, "golang context cancellation"), 10, false, nil)
+	res, err := svc.Search(context.Background(), mustQ(t, "golang context cancellation"), 10, false, nil, nil)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestAllWeakBatchesKept(t *testing.T) {
 		{Name: "a", Type: "fake", Weight: 1, Prov: a},
 		{Name: "b", Type: "fake", Weight: 1, Prov: b},
 	})
-	res, err := svc.Search(context.Background(), mustQ(t, "golang context cancellation"), 10, false, nil)
+	res, err := svc.Search(context.Background(), mustQ(t, "golang context cancellation"), 10, false, nil, nil)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestSingleProviderOffTopicItemsFiltered(t *testing.T) {
 	svc := newTestServiceMulti(t, qualityTestConfig(), []*Source{
 		{Name: "only", Type: "fake", Weight: 1, Prov: f},
 	})
-	res, err := svc.Search(context.Background(), mustQ(t, "golang context cancellation"), 10, false, nil)
+	res, err := svc.Search(context.Background(), mustQ(t, "golang context cancellation"), 10, false, nil, nil)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}

@@ -84,11 +84,14 @@ type Guard struct {
 	ports        map[int]bool
 	maxRedirects int
 	dialer       *net.Dialer
+	// preferFamily restricts outbound fetches to one address family:
+	// 0 = any, 4 = IPv4 only, 6 = IPv6 only.
+	preferFamily int
 }
 
 // New builds a guard. allowPrivate disables RFC1918/loopback blocking (local
 // debugging only). Ports is the allowlist of destination ports.
-func New(allowPrivate bool, ports []int, maxRedirects int) *Guard {
+func New(allowPrivate bool, ports []int, maxRedirects int, ipVersion string) *Guard {
 	if maxRedirects <= 0 {
 		maxRedirects = 5
 	}
@@ -100,11 +103,19 @@ func New(allowPrivate bool, ports []int, maxRedirects int) *Guard {
 		pm[80] = true
 		pm[443] = true
 	}
+	family := 0
+	switch strings.ToLower(strings.TrimSpace(ipVersion)) {
+	case "4":
+		family = 4
+	case "6":
+		family = 6
+	}
 	return &Guard{
 		allowPrivate: allowPrivate,
 		ports:        pm,
 		maxRedirects: maxRedirects,
 		dialer:       &net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second},
+		preferFamily: family,
 	}
 }
 
@@ -208,8 +219,10 @@ func (g *Guard) DialContext(ctx context.Context, network, addr string) (net.Conn
 			return nil, fmt.Errorf("%w: host %q resolves to blocked ip %s", ErrBlocked, host, ipa.IP)
 		}
 	}
+	dial := filterByFamily(ips, g.preferFamily)
+
 	var lastErr error
-	for _, ipa := range ips {
+	for _, ipa := range dial {
 		conn, derr := g.dialer.DialContext(ctx, network, net.JoinHostPort(ipa.IP.String(), portStr))
 		if derr == nil {
 			return conn, nil
@@ -217,6 +230,25 @@ func (g *Guard) DialContext(ctx context.Context, network, addr string) (net.Conn
 		lastErr = derr
 	}
 	return nil, fmt.Errorf("dial %q: %w", host, lastErr)
+}
+
+// filterByFamily keeps the addresses of one address family. A family of 0
+// keeps everything; when no address matches, the original list is returned so
+// the caller still tries every validated address.
+func filterByFamily(ips []net.IPAddr, family int) []net.IPAddr {
+	if family == 0 || len(ips) == 0 {
+		return ips
+	}
+	preferred := make([]net.IPAddr, 0, len(ips))
+	for _, ipa := range ips {
+		if (family == 4) == (ipa.IP.To4() != nil) {
+			preferred = append(preferred, ipa)
+		}
+	}
+	if len(preferred) == 0 {
+		return ips
+	}
+	return preferred
 }
 
 // NewClient returns an HTTP client whose transport is SSRF-safe.

@@ -238,6 +238,41 @@ Bing 的 RSS 与 HTML 共用一套搜索后端，区别只是渲染方式：
 
 ---
 
+### 出网源地址池（多 IPv6 出口）
+
+provider 可以配置 `source_ip_pool`，把出网请求绑定到指定源地址；`"auto"` 表示自动探测本机公网地址（IPv6 优先）。用途是把上游的"按 IP 限流 / 风控"变成"按地址池限流"——在有路由 IPv6 前缀的机器上，几十个 IPv6 源地址就是几十个独立客户端。
+
+```yaml
+providers:
+  - name: bing-zh
+    type: bingrss
+    base_url: "https://www.bing.com"
+    market: "zh-CN"
+    source_ip_pool: ["auto"]      # 或写死一串 IPv6 地址
+    proxy: ""                     # 可选：该 provider 走 HTTP 代理
+```
+
+要点：
+
+- **Bing 会话与源地址绑定**：会话 cookie、指纹、cvid 与它的源地址一起轮换（会话失效 / 风控重试时换地址并重新预热），避免"同一套 cookie 换 IP"这种更容易触发风控的组合。
+- 绑定不可用时（目标只有 A 记录、地址族不匹配）自动回落默认源地址，不会让请求失败。
+- 回环目标（本地 SearXNG）不绑定源地址。
+- 抓正文（`/v1/tools/fetch`）默认走 IPv4（`fetch.ip_version`）：不少站点对机房 IPv6 段更严格。
+
+### 抓取流量上限
+
+`fetch` 段与每个 key 都有独立的抓取闸门，防止单个 key 把机器带宽刷光：
+
+| 配置 | 作用 | 超限响应 |
+|---|---|---|
+| `auth.keys[].fetch_daily_bytes` | 每 key 每日上游抓取字节上限（0 = 不限） | 402 `insufficient_quota` |
+| `auth.keys[].fetch_daily_count` | 每 key 每日上游抓取次数上限 | 402 |
+| `auth.fetch_max_concurrency` | 每 key 并发抓取上限 | 429 `rate_limit_exceeded` |
+| `fetch.max_concurrency` | 全局并发抓取上限 | 429 |
+| `fetch.server_daily_bytes` | 全部 key 合计每日字节上限（0 = 不限） | 402 |
+
+计数口径是**真实上游传输字节**（缓存命中不计）；预扣按剩余额度封顶，因此单次请求最多超出额度一个响应体大小，额度用尽后不再放行新的抓取。相关指标：`onesearch_fetch_bytes_total`、`onesearch_fetch_quota_rejected_total{reason}`。
+
 ## API
 
 ### `POST /v1/tools/search`

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"html"
 	"io"
 	"net"
@@ -49,6 +50,13 @@ type Provider interface {
 	Search(ctx context.Context, q query.Query) ([]Result, error)
 }
 
+// SourceIPInfo is implemented by providers that bind their outgoing requests
+// to a source address. It exists for start-up diagnostics.
+type SourceIPInfo interface {
+	// SourceIP returns the address the provider's current session uses.
+	SourceIP() string
+}
+
 // Realistic browser fingerprints used by the scraping providers unless the
 // configuration overrides them. Bing/DuckDuckGo reject Go's default
 // "Go-http-client/1.1" UA intermittently (Bing answers 200 with an empty RSS
@@ -61,19 +69,27 @@ const (
 // New builds a provider from configuration.
 func New(cfg config.ProviderConfig, userAgent string) (Provider, error) {
 	ua := resolveProviderUA(cfg, userAgent)
-	client := NewHTTPClient(cfg.Timeout.D(), ua)
+	out, err := NewOutbound(cfg.Proxy, cfg.SourceIPPool)
+	if err != nil {
+		return nil, err
+	}
+	// Stagger the providers over the shared pool so two of them do not start
+	// on the same source address.
+	out.Offset(offsetFor(cfg.Name))
+	timeout := cfg.Timeout.D()
+	client := out.CachedClient("", timeout, ua)
 
 	switch cfg.Type {
 	case "searxng":
 		return &searxng{name: cfg.Name, base: cfg.BaseURL, token: cfg.Token,
 			headers: cfg.Headers, region: cfg.Region, client: client}, nil
 	case "bingrss":
-		return &bingRSS{name: cfg.Name, sess: newBingSession(cfg, client, ua)}, nil
+		return &bingRSS{name: cfg.Name, sess: newBingSession(cfg, out, ua)}, nil
 	case "binghtml":
-		return &bingHTML{name: cfg.Name, sess: newBingSession(cfg, client, ua)}, nil
+		return &bingHTML{name: cfg.Name, sess: newBingSession(cfg, out, ua)}, nil
 	case "duckduckgo":
 		return &duckDuckGo{name: cfg.Name, base: cfg.BaseURL, headers: cfg.Headers,
-			region: cfg.Region, client: client}, nil
+			region: cfg.Region, client: client, out: out, timeout: timeout, ua: ua}, nil
 	case "brave":
 		return &brave{name: cfg.Name, apiKey: cfg.APIKey, base: baseOr(cfg.BaseURL, "https://api.search.brave.com"),
 			headers: cfg.Headers, region: cfg.Region, client: client}, nil
@@ -83,6 +99,14 @@ func New(cfg config.ProviderConfig, userAgent string) (Provider, error) {
 	default:
 		return nil, fmt.Errorf("unknown provider type %q", cfg.Type)
 	}
+}
+
+// offsetFor derives a stable per-provider offset from its name, so the
+// providers of one process spread over the source-address pool.
+func offsetFor(name string) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(name))
+	return h.Sum64()
 }
 
 // resolveProviderUA picks the User-Agent for a provider.

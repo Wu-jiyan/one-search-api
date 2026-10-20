@@ -126,8 +126,17 @@ func bingAcceptLanguage(market string, rng *mrand.Rand) string {
 // Bing answers 200 with an empty RSS channel to bot-like requests, so this
 // material changes success rates.
 type bingSession struct {
-	base        string
-	client      *http.Client
+	base string
+	// out owns the source-address pool; srcIP is the address this session's
+	// identity is bound to.
+	out     *Outbound
+	srcIP   string
+	timeout time.Duration
+	ua      string
+
+	clientMu sync.RWMutex
+	client   *http.Client
+
 	referer     string
 	extraCookie string
 	market      string
@@ -147,9 +156,13 @@ type bingSession struct {
 	warmedAt  time.Time
 }
 
-func newBingSession(cfg config.ProviderConfig, client *http.Client, pinnedUA string) *bingSession {
+func newBingSession(cfg config.ProviderConfig, out *Outbound, userAgent string) *bingSession {
 	jar := newSwappableJar()
-	client.Jar = jar
+
+	timeout := cfg.Timeout.D()
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
 
 	base := strings.TrimRight(cfg.BaseURL, "/")
 	referer := strings.TrimSpace(cfg.Referer)
@@ -159,7 +172,9 @@ func newBingSession(cfg config.ProviderConfig, client *http.Client, pinnedUA str
 	seed := int64(binary.LittleEndian.Uint64(randomBytes(8)))
 	s := &bingSession{
 		base:        base,
-		client:      client,
+		out:         out,
+		timeout:     timeout,
+		ua:          userAgent,
 		referer:     referer,
 		extraCookie: strings.TrimSpace(cfg.Cookies),
 		market:      strings.TrimSpace(cfg.Market),
@@ -187,7 +202,10 @@ func randomCVID() string {
 	return strings.ToUpper(hex.EncodeToString(randomBytes(16)))
 }
 
-// rotateLocked switches to a brand-new browser identity (called under warmMu).
+// rotateLocked switches to a brand-new browser identity and to a fresh source
+// address, so the new identity never shares an upstream IP with the old one.
+// The cookie jar is reset with it, keeping cookies and source address
+// consistent (called under warmMu).
 func (s *bingSession) rotateLocked() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -196,6 +214,26 @@ func (s *bingSession) rotateLocked() {
 	s.lastQuery = ""
 	s.warmedAt = time.Time{}
 	s.jar.reset()
+
+	var client *http.Client
+	if s.out != nil {
+		s.srcIP = s.out.Next()
+		client = s.out.NewClient(s.srcIP, s.timeout, s.ua)
+	} else {
+		client = NewHTTPClient(s.timeout, s.ua)
+	}
+	client.Jar = s.jar
+	s.clientMu.Lock()
+	s.client = client
+	s.clientMu.Unlock()
+}
+
+// httpClient returns the session's current client. It is replaced on every
+// identity rotation, so it is read under a lock.
+func (s *bingSession) httpClient() *http.Client {
+	s.clientMu.RLock()
+	defer s.clientMu.RUnlock()
+	return s.client
 }
 
 func (s *bingSession) currentFP() bingFingerprint {
@@ -238,7 +276,7 @@ func (s *bingSession) ensure(ctx context.Context) {
 		return
 	}
 	s.applyHeaders(req, "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8", "none")
-	resp, err := s.client.Do(req)
+	resp, err := s.httpClient().Do(req)
 	if err != nil {
 		debugf("bingsession warmup error: %v", err)
 		return
@@ -298,7 +336,7 @@ func (s *bingSession) get(ctx context.Context, target, accept string) (*http.Res
 		return nil, err
 	}
 	s.applyHeaders(req, accept, "same-origin")
-	return s.client.Do(req)
+	return s.httpClient().Do(req)
 }
 
 // noteQuery remembers the previous query for the pq= parameter.
@@ -386,7 +424,14 @@ func (s *bingSession) describe() string {
 		kind = "mobile"
 	}
 	fp := s.currentFP()
-	return fmt.Sprintf("%s market=%q platform=%s base=%s", kind, s.market, fp.Platform, s.base)
+	return fmt.Sprintf("%s market=%q platform=%s base=%s src=%s", kind, s.market, fp.Platform, s.base, s.sourceIP())
+}
+
+// sourceIP returns the address this session's identity is bound to.
+func (s *bingSession) sourceIP() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.srcIP
 }
 
 // randIntn returns a crypto-random int in [0,n). It is safe for concurrent use,

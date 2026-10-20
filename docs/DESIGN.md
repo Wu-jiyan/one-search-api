@@ -437,6 +437,32 @@ provider 级 Browser 指纹字段（Bing/DDG 生效，其余类型忽略）：
 7. 无 `localization` 地理定位。
 8. 不保证官方未来 schema 变更的自动跟进。
 
+## 14.5 出网源地址池与抓取闸门（v1.1）
+
+### 14.5.1 出网源地址池
+
+- `providers[].source_ip_pool`：出网源地址列表；`"auto"` 展开为本机公网地址（IPv6 优先，排除 RFC1918 / CGNAT / ULA）。
+- `providers[].proxy`：该 provider 专用 HTTP 代理（不配置则读 `HTTP_PROXY`/`HTTPS_PROXY`）。
+- 实现：`internal/provider/outbound.go`。`Outbound` 持有代理、地址池与"每地址一个连接池"的客户端缓存；`Next()` 轮询取地址。
+- **绑定规则**：目标为回环时不绑定；绑定地址族与目标不匹配时回落默认源地址（先试绑定，再试不绑定）。
+- **Bing 会话绑定**：`bingSession` 持有 `srcIP`；`rotateLocked()`（会话失效 / 身份轮换）在换指纹、换 cvid、清 cookie 的同时换源地址并重建 client，随后 `ensure()` 用新地址重新预热——保证 cookie 与源地址始终成对出现。
+- 各 provider 用 `fnv(name)` 偏移轮询起点，避免多个 provider 抢同一个源地址。
+- 抓取路径（`internal/fetchguard`）**不**绑定源地址：正文抓取对源 IP 敏感度低，且机房 IPv6 段被拒率更高；`fetch.ip_version` 控制其地址族。
+
+### 14.5.2 抓取闸门
+
+| 闸门 | 配置 | 实现 | 超限 |
+|---|---|---|---|
+| 每 key 日字节 | `auth.keys[].fetch_daily_bytes` | `auth.Key.fetchBytes` + 预扣 | 402 |
+| 每 key 日次数 | `auth.keys[].fetch_daily_count` | `auth.Key.fetchCount` | 402 |
+| 每 key 并发 | `auth.fetch_max_concurrency` | `auth.Key.fetchSem` | 429 |
+| 全局并发 | `fetch.max_concurrency` | `fetchsvc.Service.sem` | 429 |
+| 全局日字节 | `fetch.server_daily_bytes` | `fetchsvc.byteBudget` | 402 |
+
+- 计量对象是**上游真实传输字节**（`len(body)`，含被截断的响应），缓存命中不计费。
+- 预扣（reserve）与结算（commit）分离：预扣额 = min(请求上限, 剩余额度)，结算时按实际字节记账，因此单次请求最多超出额度一个响应体大小；额度耗尽后不再放行新抓取。
+- 指标：`onesearch_fetch_bytes_total`、`onesearch_fetch_quota_rejected_total{reason=key_quota|key_concurrency|server_quota|concurrency}`。
+
 ## 15. 后续（不在 v1）
 
 - 可选 LLM 富化（summary 重写 / 语义重排），配置开关。

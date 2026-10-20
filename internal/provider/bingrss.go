@@ -20,6 +20,9 @@ type bingRSS struct {
 func (b *bingRSS) Name() string { return b.name }
 func (b *bingRSS) Type() string { return "bingrss" }
 
+// SourceIP returns the address this provider's Bing session is bound to.
+func (b *bingRSS) SourceIP() string { return b.sess.sourceIP() }
+
 // Warm pre-warms the browser session (called at startup).
 func (b *bingRSS) Warm(ctx context.Context) { b.sess.Warm(ctx) }
 

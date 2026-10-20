@@ -1,0 +1,17 @@
+use_default_settings: true
+
+general:
+  instance_name: "one-search-api"
+
+server:
+  secret_key: "__SearXNG_SECRET__"
+  limiter: false
+  public_instance: false
+  image_proxy: false
+
+search:
+  safe_search: 0
+  default_lang: "zh-CN"
+  formats:
+    - html
+    - json
