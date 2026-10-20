@@ -1,0 +1,13 @@
+[Unit]
+Description=Expand the routed IPv6 prefix into a source-address pool
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/onesearch-ipv6-pool.sh
+ExecStop=/usr/local/sbin/onesearch-ipv6-pool.sh --clear
+
+[Install]
+WantedBy=multi-user.target

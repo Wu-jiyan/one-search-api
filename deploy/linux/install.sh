@@ -31,6 +31,17 @@ chmod 640 ${APP_DIR}/config.yaml
 chown root:root ${BIN}
 chmod 755 ${BIN}
 
+# --- IPv6 source-address pool ---------------------------------------------
+# The provider routes the whole IPv6 prefix it assigned, so one address from
+# each /64 in it can be listed on the interface: upstreams that aggregate by
+# prefix then see distinct clients instead of one.
+install -m 0755 ${APP_DIR}/onesearch-ipv6-pool.sh /usr/local/sbin/onesearch-ipv6-pool.sh
+cp ${APP_DIR}/onesearch-ipv6-pool.service /etc/systemd/system/onesearch-ipv6-pool.service
+systemctl daemon-reload
+systemctl enable onesearch-ipv6-pool >/dev/null
+systemctl restart onesearch-ipv6-pool
+log "IPv6 source-address pool expanded"
+
 # --- systemd ---------------------------------------------------------------
 cp ${APP_DIR}/onesearch.service ${UNIT}
 systemctl daemon-reload
@@ -41,13 +52,21 @@ log "onesearch service started"
 # --- nginx -----------------------------------------------------------------
 cp ${APP_DIR}/onesearch-api.conf ${VHOST}
 nginx -t
-systemctl reload nginx
+if [ -x /www/server/nginx/sbin/nginx ]; then
+  # BaoTa starts nginx outside systemd, so the unit stays inactive and
+  # "systemctl reload nginx" refuses; reload through the panel binary.
+  /www/server/nginx/sbin/nginx -c /www/server/nginx/conf/nginx.conf -s reload
+else
+  systemctl reload nginx
+fi
 log "nginx vhost installed"
 
 # --- firewall: keep the new ports private ----------------------------------
 for rule in \
   "103.116.245.218 18091" \
   "103.116.245.218 18092" \
+  "85.137.240.166 18091" \
+  "85.137.240.166 18092" \
   "172.16.0.0/12 18091" \
   "172.16.0.0/12 18092" \
   "10.0.0.0/8 18092"; do

@@ -1,7 +1,7 @@
 [Unit]
 Description=One Search API (DeepSeek-compatible search/fetch gateway)
-After=network-online.target docker.service
-Wants=network-online.target
+After=network-online.target docker.service onesearch-ipv6-pool.service
+Wants=network-online.target onesearch-ipv6-pool.service
 
 [Service]
 Type=simple
