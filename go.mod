@@ -1,6 +1,6 @@
 module github.com/Wu-jiyan/one-search-api
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.2
